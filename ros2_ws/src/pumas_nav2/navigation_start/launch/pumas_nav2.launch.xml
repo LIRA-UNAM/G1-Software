@@ -192,7 +192,7 @@
     <param name="laser_min_x" value="$(var laser_min_x)"/>
     <param name="laser_max_y" value="$(var laser_max_y)"/>
     <param name="laser_min_y" value="$(var laser_min_y)"/>
-    <param name="laser_max_z" value="$(var laser_max_z)"/>
+   <param name="laser_max_z" value="$(var laser_max_z)"/>
     <param name="laser_min_z" value="$(var laser_min_z)"/>
 
     <param name="cloud_max_x" value="$(var cloud_max_x)"/>
