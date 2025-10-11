@@ -3,12 +3,12 @@
   <!-- Arguments -->
   <arg name="use_sim_time" default="false"/>
 
-  <arg name="static_map_file" default="$(find-pkg-share navigation_start)/maps/maps/wrs2020/map.yaml"/>
-  <arg name="prohibition_map_file" default="$(find-pkg-share navigation_start)/maps/prohibition_maps/wrs2020/map.yaml"/>
+  <arg name="static_map_file" default="$(find-pkg-share navigation_start)/maps/maps/simul_simple_house.yaml"/>
+  <arg name="prohibition_map_file" default="$(find-pkg-share navigation_start)/maps/prohibition_maps/simul_simple_house.yaml"/>
 
   <arg name="odom_topic" default="/odom"/>
   <arg name="pose_topic" default="/pose"/>
-  <arg name="cmd_vel_topic" default="/omni_base_controller/cmd_vel"/>
+  <arg name="cmd_vel_topic" default="/cmd_vel"/>
   <arg name="laser_scan_topic" default="/scan"/>
   <arg name="point_cloud_topic" default="/head_rgbd_sensor/depth_registered/rectified_points"/>
   <arg name="bumper_f_topic" default="/base_f_bumper_sensor"/>
@@ -66,7 +66,7 @@
         respawn="true">
     <param name="use_sim_time" value="$(var use_sim_time)"/>
     <param name="autostart" value="true"/>
-    <param name="node_names" value="['static_map_server', 'prohibition_map_server']"/>
+    <param name="node_names" value="['static_map_server', 'prohibition_map_server', 'amcl']"/>
   </node>
 
   <!-- Map Enhancer -->
@@ -86,27 +86,19 @@
   </node>
 
   <!-- Localization  -->
-  <!-- Start EMCL2 localization or your own navigation -->
-  <!-- <node name="emcl2" -->
-  <!--       pkg="emcl2" -->
-  <!--       exec="emcl2_node" -->
-  <!--       output="log" -->
-  <!--       args="-\-ros-args -\-log-level WARN" -->
-  <!--       respawn="true"> -->
-  <!--   <param name="num_particles" value="1000"/> -->
-
-  <!--   <param name="odom_frame_id" value="odom"/>  -->
-  <!--   <param name="base_frame_id" value="base_link"/> -->
-  <!--   <param name="footprint_frame_id" value="base_footprint"/> -->
-  <!--   <param name="global_frame_id" value="map"/> -->
-
-  <!--   <remap from="scan" to="$(var laser_scan_topic)"/> -->
-  <!--   <remap from="local_costmap/scan" to="$(var laser_scan_topic)"/> -->
-  <!--   <remap from="odom" to="$(var odom_topic)"/> -->
-  <!--   <remap from="cmd_vel" to="$(var cmd_vel_topic)"/> -->
-  <!--   <remap from="mcl_pose" to="$(var pose_topic)"/> -->
-  <!--   <remap from="map" to="/map"/> -->
-  <!-- </node> -->
+  <node name="amcl"
+        pkg="nav2_amcl"
+        exec="amcl"
+        output="screen">
+    <param name="base_frame_id" value="base_link"/>
+    <param name="set_initial_pose" value="True"/>
+    <param name="use_sim_time" value="True"/>
+    <param name="alpha1" value="0.01"/>
+    <param name="alpha2" value="0.01"/>
+    <param name="alpha3" value="0.1"/>
+    <param name="alpha4" value="0.1"/>
+    <param name="map_topic" value="/nav_map"/>
+  </node>
 
   <!-- Map Augmenters -->
   <node name="map_augmenter" 
@@ -163,6 +155,7 @@
         exec="simple_move_node"  
         output="screen"
         respawn="true">
+    <param name="base_link_name" value="base_link"/>
     <param name="max_linear_speed" value="0.8"/>
     <param name="max_angular_speed" value="1.25"/>
 
@@ -232,6 +225,7 @@
         respawn="true">
     <remap from="/nav_control/goal" to="/move_base_simple/goal"/>
     <param name="patience" value="$(var mvn_pln_patience)"/>
+    <param name="base_link_name" value="base_link"/>
   </node>
 
   <!-- <!-\- Hardware Controller -\-> -->
