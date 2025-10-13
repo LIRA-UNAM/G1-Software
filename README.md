@@ -130,3 +130,15 @@ header:
 parameter: '{\"index\":1, \"speaker_id\":0, \"text\":\"Hello, how are you?\"}'
 binary: []"
 ```
+
+To start the LiDAR node, use:
+
+```
+ros2 launch livox_ros_driver2 rviz_MID360_launch.py
+```
+
+To start the camera node, use:
+
+```
+ros2 launch realsense2_camera rs_launch.py
+```
