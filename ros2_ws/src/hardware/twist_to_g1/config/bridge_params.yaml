@@ -1,0 +1,10 @@
+twist_to_g1:
+  ros__parameters:
+    publish_rate_hz: 10.0
+    command_duration_s: 0.20
+    min_linear_speed: 0.20
+    max_linear_speed: 0.80
+    max_lateral_speed: 0.40
+    max_yaw_rate: 0.80
+    deadman_timeout_s: 0.50
+    priority: 1

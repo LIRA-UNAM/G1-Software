@@ -1,6 +1,7 @@
 from setuptools import find_packages, setup
+import os
 
-package_name = 'twist_to_g1'
+package_name = 'hardware_bringup'
 
 setup(
     name=package_name,
@@ -9,19 +10,18 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', [f'resource/{package_name}']),
         (f'share/{package_name}', ['package.xml']),
-        (f'share/{package_name}/launch', ['launch/g1_cmdvel.launch.py']),
-        (f'share/{package_name}/config', ['config/bridge_params.yaml']),
+        (f'share/{package_name}/launch', ['launch/g1_init.launch.py']),
+        (os.path.join('lib', package_name), ['scripts/g1_initializer']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='thedoctor',
-    maintainer_email='marco.negrete@ingenieria.unam.edu',
-    description='Bridge /cmd_vel -> Unitree G1.',
+    maintainer='Angel',
+    maintainer_email='mglp@gmail.com',
+    description='Bringup e inicialización del G1.',
     license='MIT',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'twist_to_g1 = twist_to_g1.twist_to_g1:main',
+            'g1_initializer = hardware_bringup.g1_initializer:main',
         ],
     },
 )
