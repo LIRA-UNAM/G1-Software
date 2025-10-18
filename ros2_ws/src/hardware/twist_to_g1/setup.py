@@ -20,7 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'twist_to_g1 = twist_to_g1.twist_to_g1:main'
+            'twist_to_g1 = twist_to_g1.twist_to_g1:main',
+            'odom_to_tf = twist_to_g1.odom_to_tf:main',
         ],
     },
 )
