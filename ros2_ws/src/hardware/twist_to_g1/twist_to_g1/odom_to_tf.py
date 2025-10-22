@@ -18,7 +18,11 @@ class OdomToTFNode(Node):
 
     def callback_odom_state(self, msg):
         self.get_logger().info(f"Received SportModeState:")
-        print(msg.position.)
+        self.robot_x = msg.position[0]
+        self.robot_y = msg.position[1]
+        self.robot_a = (math.atan2(msg.imu_state.quaternion[3], msg.imu_state.quaternion[0]) * 2.0 + math.pi) % (2.0 * math.pi) - math.pi
+        self.get_logger().info(f"Position: x={self.robot_x}, y={self.robot_y}, angle={self.robot_a}")
+        
         
 
     def timer_callback(self):
@@ -33,7 +37,6 @@ class OdomToTFNode(Node):
         transform.transform.translation.y = 2.0
         transform.transform.translation.z = 0.0
         
-        quat = self.euler_to_quaternion(0.0, 0.0, math.radians(45))
         transform.transform.rotation.x = quat[0]
         transform.transform.rotation.y = quat[1]
         transform.transform.rotation.z = quat[2]
