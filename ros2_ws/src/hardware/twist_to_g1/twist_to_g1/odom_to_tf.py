@@ -17,11 +17,11 @@ class OdomToTFNode(Node):
         self.robot_a=0.0
 
     def callback_odom_state(self, msg):
-        self.get_logger().info(f"Received SportModeState:")
+        #self.get_logger().info(f"Received SportModeState:")
         self.robot_x = msg.position[0]
         self.robot_y = msg.position[1]
         self.robot_a = (math.atan2(msg.imu_state.quaternion[3], msg.imu_state.quaternion[0]) * 2.0 + math.pi) % (2.0 * math.pi) - math.pi
-        self.get_logger().info(f"Position: x={self.robot_x}, y={self.robot_y}, angle={self.robot_a}")
+        #self.get_logger().info(f"Position: x={self.robot_x}, y={self.robot_y}, angle={self.robot_a}")
         
         
 
@@ -33,14 +33,15 @@ class OdomToTFNode(Node):
         transform.child_frame_id = 'base_link'
         
         # Example static transform values
-        transform.transform.translation.x = 1.0
-        transform.transform.translation.y = 2.0
+        transform.transform.translation.x = float(self.robot_x)
+        transform.transform.translation.y = float(self.robot_y)
         transform.transform.translation.z = 0.0
         
-        transform.transform.rotation.x = quat[0]
-        transform.transform.rotation.y = quat[1]
-        transform.transform.rotation.z = quat[2]
-        transform.transform.rotation.w = quat[3]
+        qx, qy, qz, qw = self.euler_to_quaternion(0.0,0.0,float(self.robot_a))
+        transform.transform.rotation.x = qx
+        transform.transform.rotation.y = qy
+        transform.transform.rotation.z = qz
+        transform.transform.rotation.w = qw
 
         self.broadcaster.sendTransform(transform)
 
@@ -57,3 +58,7 @@ def main():
     node = OdomToTFNode()
     rclpy.spin(node)
     node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == "__main__":
+    main()

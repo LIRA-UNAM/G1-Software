@@ -1,7 +1,11 @@
 from setuptools import find_packages, setup
+from glob import glob
 import os
 
 package_name = 'hardware_bringup'
+
+def files_if_dir(path_glob):
+    return glob(path_glob) if any(True for _ in glob(path_glob)) else []
 
 setup(
     name=package_name,
@@ -10,8 +14,11 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', [f'resource/{package_name}']),
         (f'share/{package_name}', ['package.xml']),
-        (f'share/{package_name}/launch', ['launch/g1_init.launch.py']),
-        (os.path.join('lib', package_name), ['scripts/g1_initializer']),
+        (f'share/{package_name}/launch', files_if_dir('launch/*')),
+        (f'share/{package_name}/urdf',   files_if_dir('urdf/*')),
+        (f'share/{package_name}/meshes', files_if_dir('meshes/*')),
+        (f'share/{package_name}/rviz',   files_if_dir('rviz/*')),
+        (os.path.join('lib', package_name), files_if_dir('scripts/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -25,3 +32,4 @@ setup(
         ],
     },
 )
+
