@@ -147,3 +147,16 @@ Run joystick node
 ```
 ros2 run teleop_twist_joy teleop_node --ros-args -p require_enable_button:=false -p axis_linear.x:=7 -p axis_angular.yaw:=6
 ```
+
+ros2 launch hardware_bringup g1_init.launch.py
+
+ros2 launch hardware_bringup g1_bringup.launch.py
+
+ros2 launch twist_to_g1 g1_cmdvel.launch.py
+
+ros2 run joy joy_node
+
+ros2 run teleop_twist_joy teleop_node --ros-args -p require_enable_button:=false -p axis_linear.x:=7 -p axis_angular.yaw:=6
+
+ros2 launch livox_ros_driver2 rviz_MID360_launch.py (dentro del robot)
+
