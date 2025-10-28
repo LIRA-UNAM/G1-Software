@@ -142,3 +142,8 @@ To start the camera node, use:
 ```
 ros2 launch realsense2_camera rs_launch.py
 ```
+
+Run joystick node
+```
+ros2 run teleop_twist_joy teleop_node --ros-args -p require_enable_button:=false -p axis_linear.x:=7 -p axis_angular.yaw:=6
+```
