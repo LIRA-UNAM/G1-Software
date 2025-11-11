@@ -11,7 +11,7 @@ def generate_launch_description():
     livox_share = get_package_share_directory('livox_ros_driver2')
 
     urdf_path   = os.path.join(pkg, 'urdf', 'g1_23dof.urdf')
-    map_path    = os.path.join(pkg, 'maps', 'map_1762808489.yaml')
+    map_path    = os.path.join(pkg, 'maps', 'map1.yaml')
     amcl_path   = os.path.join(pkg, 'config', 'amcl_params.yaml')
 
     use_sim_time    = LaunchConfiguration('use_sim_time')
@@ -22,7 +22,7 @@ def generate_launch_description():
 
     livox_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(livox_share, 'launch', 'rviz_MID360_launch.py')
+            os.path.join(livox_share, 'launch_ROS2', 'rviz_MID360_launch.py')
         )
     )
 
@@ -41,6 +41,9 @@ def generate_launch_description():
             output='screen',
             # parameters=[{'odom_frame': odom_frame, 'base_frame': base_link}],
         ),
+
+
+        livox_launch,
 
         # -------- Robot State --------
         Node(
