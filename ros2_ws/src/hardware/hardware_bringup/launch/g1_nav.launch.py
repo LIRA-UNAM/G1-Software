@@ -4,6 +4,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import TimerAction
 import os
 
 def generate_launch_description():
@@ -11,7 +12,7 @@ def generate_launch_description():
     livox_share = get_package_share_directory('livox_ros_driver2')
 
     urdf_path   = os.path.join(pkg, 'urdf', 'g1_23dof.urdf')
-    map_path    = os.path.join(pkg, 'maps', 'map1.yaml')
+    map_path    = os.path.join(pkg, 'maps', 'map_1762808489.yaml')
     amcl_path   = os.path.join(pkg, 'config', 'amcl_params.yaml')
 
     use_sim_time    = LaunchConfiguration('use_sim_time')
@@ -22,7 +23,7 @@ def generate_launch_description():
 
     livox_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(livox_share, 'launch_ROS2', 'rviz_MID360_launch.py')
+            os.path.join(livox_share, 'launch', 'rviz_MID360_launch.py')
         )
     )
 
@@ -42,8 +43,11 @@ def generate_launch_description():
             # parameters=[{'odom_frame': odom_frame, 'base_frame': base_link}],
         ),
 
+        Node(
 
-        livox_launch,
+            livox_launch,
+
+        ),
 
         # -------- Robot State --------
         Node(
@@ -61,7 +65,7 @@ def generate_launch_description():
         ),
 
         # -------- PointCloud2 --------
-        Node(
+        pcl_to_scan = Node(
             package='pointcloud_to_laserscan',
             executable='pointcloud_to_laserscan_node',
             name='mid360_to_scan',
@@ -121,5 +125,7 @@ def generate_launch_description():
         #         'node_names': ['map_server', 'amcl']
         #     }]
         # ),
+
+        TimerAction(period=2.0, actions=[pcl_to_scan]),
 
     ])
