@@ -27,6 +27,26 @@ def generate_launch_description():
         )
     )
 
+    pcl_to_scan = Node(
+        package='pointcloud_to_laserscan',
+        executable='pointcloud_to_laserscan_node',
+        name='mid360_to_scan',
+        remappings=[('cloud_in', '/livox/lidar'), ('scan', laser_topic)],
+        parameters=[{
+            'target_frame': 'mid360_link',
+            'min_height':  0.05,
+            'max_height':  0.50,
+            'angle_min':  -3.14159,
+            'angle_max':   3.14159,
+            'angle_increment': 0.0043633,
+            'range_min': 0.3,
+            'range_max': 20.0,
+            'scan_time': 0.05,
+            'use_inf': True,
+        }],
+        output='screen',
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time',      default_value='false'),
         DeclareLaunchArgument('laser_scan_topic',  default_value='/scan_mid360'),
@@ -64,26 +84,26 @@ def generate_launch_description():
             output='screen'
         ),
 
-        # -------- PointCloud2 --------
-        pcl_to_scan = Node(
-            package='pointcloud_to_laserscan',
-            executable='pointcloud_to_laserscan_node',
-            name='mid360_to_scan',
-            remappings=[('cloud_in', '/livox/lidar'), ('scan', laser_topic)],
-            parameters=[{
-                'target_frame': 'mid360_link',
-                'min_height':  0.05,
-                'max_height':  0.50,
-                'angle_min':  -3.14159,
-                'angle_max':   3.14159,
-                'angle_increment': 0.0043633,
-                'range_min': 0.3,
-                'range_max': 20.0,
-                'scan_time': 0.05,
-                'use_inf': True,
-            }],
-            output='screen',
-        ),
+        # # -------- PointCloud2 --------
+        # pcl_to_scan = Node(
+        #     package='pointcloud_to_laserscan',
+        #     executable='pointcloud_to_laserscan_node',
+        #     name='mid360_to_scan',
+        #     remappings=[('cloud_in', '/livox/lidar'), ('scan', laser_topic)],
+        #     parameters=[{
+        #         'target_frame': 'mid360_link',
+        #         'min_height':  0.05,
+        #         'max_height':  0.50,
+        #         'angle_min':  -3.14159,
+        #         'angle_max':   3.14159,
+        #         'angle_increment': 0.0043633,
+        #         'range_min': 0.3,
+        #         'range_max': 20.0,
+        #         'scan_time': 0.05,
+        #         'use_inf': True,
+        #     }],
+        #     output='screen',
+        # ),
 
         # # -------- Map Server  --------
         # LifecycleNode(
