@@ -63,11 +63,7 @@ def generate_launch_description():
             # parameters=[{'odom_frame': odom_frame, 'base_frame': base_link}],
         ),
 
-        Node(
-
-            livox_launch,
-
-        ),
+        livox_launch,
 
         # -------- Robot State --------
         Node(
