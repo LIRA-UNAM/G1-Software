@@ -1,13 +1,13 @@
 from launch import LaunchDescription
-from launch_ros.actions import Node
+from launch_ros.actions import Node, LifecycleNode
 from ament_index_python.packages import get_package_share_directory
 import os
 
 def generate_launch_description():
     pkg = get_package_share_directory('hardware_bringup')
     urdf_path = os.path.join(pkg,'urdf','g1_23dof.urdf')
-    slam_params_path = os.path.join(pkg,'config','slam_toolbox_g1.yaml')
-    teleop_yaml = os.path.join(pkg, 'config', 'teleop_joy_g1.yaml')
+    map_path = os.path.join(pkg, 'maps', 'map_1761851145.yaml')
+    amcl_path    = os.path.join(pkg, 'config','amcl_params.yaml')
 
     return LaunchDescription([
         # Odom to base_link
@@ -54,39 +54,42 @@ def generate_launch_description():
                 'scan_time': 0.05,
                 'use_inf': True,
             }],
-            output='screen'
-        ),
-
-        # Joystick
-        Node(
-            package='joy',
-            executable='joy_node',
-            name='joy_node',
             output='screen',
-            parameters=[{
-                'dev':'/dev/input/js0',
-                'deadzone':0.05,
-            }]
         ),
 
-        #Joystick teleop
-
-        # Node(
-        #     package='teleop_twist_joy',
-        #     executable='teleop_node',
-        #     name='teleop_twist_joy',
-        #     output='screen',
-        #     parameters=[os.path.join(pkg, 'config', 'teleop_joy_g1.yaml')],
-        # ),
-
-        #SLAM toolbox
-
-        Node(
-            package='slam_toolbox',
-            executable='async_slam_toolbox_node',
-            name='slam_toolbox',
+        # Map server
+        
+        LifecycleNode(
+            package='nav2_map_server',
+            executable='map_server',
+            name='map_server',
             output='screen',
-            parameters=[slam_params_path]
+            parameters=[{'yaml_filename': map_path}]
         ),
+
+        #AMCL
+
+        LifecycleNode(
+            package='nav2_amcl',
+            executable='amcl',
+            name='amcl',
+            output='screen',
+            parameters=[amcl_path,
+                        {'scan_topic': '/scan_mid360',
+                         'base_frame_id': 'base_link',
+                         'odom_frame_id': 'odom',
+                         'global_frame_id': 'map'}]
+        ),
+
+        #Lifecycle Manager
+
+        Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
+             name='lifecycle_manager_localization', output='screen',
+             parameters=[{
+                 'use_sim_time': False,
+                 'autostart': True,
+                 'bond_timeout': 10.0,
+                 'node_names': ['map_server', 'amcl']
+             }]),
   
     ])

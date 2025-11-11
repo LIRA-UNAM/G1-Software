@@ -3,13 +3,13 @@
   <!-- Arguments -->
   <arg name="use_sim_time" default="false"/>
 
-  <arg name="static_map_file" default="$(find-pkg-share hardware_bringup)/maps/map1.yaml"/>
-  <arg name="prohibition_map_file" default="$(find-pkg-share hardware_bringup)/maps/map1.yaml"/>
+  <arg name="static_map_file" default="$(find-pkg-share navigation_start)/maps/maps/simul_simple_house.yaml"/>
+  <arg name="prohibition_map_file" default="$(find-pkg-share navigation_start)/maps/prohibition_maps/simul_simple_house.yaml"/>
 
   <arg name="odom_topic" default="/odom"/>
   <arg name="pose_topic" default="/pose"/>
   <arg name="cmd_vel_topic" default="/cmd_vel"/>
-  <arg name="laser_scan_topic" default="/scan_mid360"/>
+  <arg name="laser_scan_topic" default="/scan"/>
   <arg name="point_cloud_topic" default="/head_rgbd_sensor/depth_registered/rectified_points"/>
   <arg name="bumper_f_topic" default="/base_f_bumper_sensor"/>
 
@@ -91,11 +91,8 @@
         exec="amcl"
         output="screen">
     <param name="base_frame_id" value="base_link"/>
-    <param name="scan_topic" value="$(var laser_scan_topic)"/>
-    <param name="odom_frame_id" value="odom"/>
-    <param name="global_frame_id" value="map"/>
-    <param name="use_sim_time" value="$(var use_sim_time)"/>
     <param name="set_initial_pose" value="True"/>
+    <param name="use_sim_time" value="True"/>
     <param name="alpha1" value="0.01"/>
     <param name="alpha2" value="0.01"/>
     <param name="alpha3" value="0.1"/>

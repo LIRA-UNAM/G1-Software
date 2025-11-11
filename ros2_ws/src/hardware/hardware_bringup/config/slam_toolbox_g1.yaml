@@ -3,9 +3,7 @@ slam_toolbox:
     odom_frame: odom
     base_frame: base_link
     map_frame: map
-
     scan_topic: /scan_mid360
-
     use_scan_matching: true
     use_scan_barycenter: false
     minimum_travel_distance: 0.2
@@ -16,7 +14,6 @@ slam_toolbox:
     max_laser_range: 20.0
     min_laser_range: 0.3
     missing_data_ray_length: 2.0
-
     odom_frame_publish_period: 0.05
     enable_interactive_mode: false
     max_submaps_kept: 3
@@ -25,6 +22,5 @@ slam_toolbox:
     loop_match_minimum_chain_size: 10
     loop_candidate_search_interval: 3.0
     do_submap_loop_matching: true
-
     throttle_scans: 1
     mode: "mapping"                
