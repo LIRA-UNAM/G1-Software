@@ -42,7 +42,14 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+
+        DeclareLaunchArgument('laser_scan_topic',  default_value='/scan_mid360'),
+        DeclareLaunchArgument('cmd_vel_topic',     default_value='/cmd_vel'),
+        DeclareLaunchArgument('base_link_name',    default_value='base_link'),
+        DeclareLaunchArgument('odom_frame',        default_value='odom'),
+
         # Odom to base_link
+
         Node(
             package='twist_to_g1',
             executable='odom_to_tf',

@@ -1,5 +1,4 @@
 <launch>
-
   <!-- Arguments -->
   <arg name="use_sim_time" default="false"/>
 
@@ -254,12 +253,12 @@
   <!-- </node> -->
 
   <!-- RVIZ2 -->
+
   <node name="rviz2"
-        pkg="rviz2"
-        exec="rviz2"
-        args="-d $(find-pkg-share navigation_start)/rviz/config.rviz
-              --ros-args --log-level rviz2:=warn"
-        output="screen"
-        />
+      pkg="rviz2"
+      exec="rviz2"
+      output="screen"
+      args="--display-config $(find-pkg-share navigation_start)/rviz/C2.rviz"/>
+
 
 </launch>

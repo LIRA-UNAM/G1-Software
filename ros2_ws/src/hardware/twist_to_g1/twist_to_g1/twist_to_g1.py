@@ -14,9 +14,9 @@ class CmdVelBridge(Node):
         self.declare_parameter('publish_rate_hz', 10.0)
         self.declare_parameter('command_duration_s', 0.20)
         self.declare_parameter('min_linear_speed', 0.20)
-        self.declare_parameter('max_linear_speed', 0.80)
-        self.declare_parameter('max_lateral_speed', 0.40)
-        self.declare_parameter('max_yaw_rate', 0.80)
+        self.declare_parameter('max_linear_speed', 0.20)
+        self.declare_parameter('max_lateral_speed', 0.20)
+        self.declare_parameter('max_yaw_rate', 0.20)
         self.declare_parameter('deadman_timeout_s', 0.50)
         self.declare_parameter('priority', 1)
 
