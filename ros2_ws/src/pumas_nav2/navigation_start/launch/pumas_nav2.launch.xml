@@ -2,8 +2,8 @@
   <!-- Arguments -->
   <arg name="use_sim_time" default="false"/>
 
-  <arg name="static_map_file" default="$(find-pkg-share hardware_bringup)/maps/map1.yaml"/>
-  <arg name="prohibition_map_file" default="$(find-pkg-share hardware_bringup)/maps/map1.yaml"/>
+  <arg name="static_map_file" default="$(find-pkg-share hardware_bringup)/maps/map5.yaml"/>
+  <arg name="prohibition_map_file" default="$(find-pkg-share hardware_bringup)/maps/map5.yaml"/>
 
   <arg name="odom_topic" default="/odom"/>
   <arg name="pose_topic" default="/pose"/>
