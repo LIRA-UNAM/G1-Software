@@ -1,0 +1,84 @@
+# unitree_hg <-> sensor_msgs bridge for the G1 (29 DoF).
+g1_lowlevel_bridge:
+  ros__parameters:
+    # Motor index i <-> joint_names[i] (Unitree G1 29-DoF motor order).
+    joint_names:
+      - left_hip_pitch_joint       # 0
+      - left_hip_roll_joint        # 1
+      - left_hip_yaw_joint         # 2
+      - left_knee_joint            # 3
+      - left_ankle_pitch_joint     # 4
+      - left_ankle_roll_joint      # 5
+      - right_hip_pitch_joint      # 6
+      - right_hip_roll_joint       # 7
+      - right_hip_yaw_joint        # 8
+      - right_knee_joint           # 9
+      - right_ankle_pitch_joint    # 10
+      - right_ankle_roll_joint     # 11
+      - waist_yaw_joint            # 12
+      - waist_roll_joint           # 13
+      - waist_pitch_joint          # 14
+      - left_shoulder_pitch_joint  # 15
+      - left_shoulder_roll_joint   # 16
+      - left_shoulder_yaw_joint    # 17
+      - left_elbow_joint           # 18
+      - left_wrist_roll_joint      # 19
+      - left_wrist_pitch_joint     # 20
+      - left_wrist_yaw_joint       # 21
+      - right_shoulder_pitch_joint # 22
+      - right_shoulder_roll_joint  # 23
+      - right_shoulder_yaw_joint   # 24
+      - right_elbow_joint          # 25
+      - right_wrist_roll_joint     # 26
+      - right_wrist_pitch_joint    # 27
+      - right_wrist_yaw_joint      # 28
+
+    # PD gains used in training (g1_constants.py: 10 Hz natural frequency,
+    # damping ratio 2 on the reflected rotor inertia).
+    kp: [
+      40.1792, 99.0984, 40.1792, 99.0984, 28.5012, 28.5012,
+      40.1792, 99.0984, 40.1792, 99.0984, 28.5012, 28.5012,
+      40.1792, 28.5012, 28.5012,
+      14.2506, 14.2506, 14.2506, 14.2506, 14.2506, 16.7783, 16.7783,
+      14.2506, 14.2506, 14.2506, 14.2506, 14.2506, 16.7783, 16.7783]
+    kd: [
+      2.5579, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144,
+      2.5579, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144,
+      2.5579, 1.8144, 1.8144,
+      0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681,
+      0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681]
+
+    # Joint ranges from g1.xml; targets are clamped to them.
+    position_lower: [
+      -2.5307, -0.5236, -2.7576, -0.0873, -0.8727, -0.2618,
+      -2.5307, -2.9671, -2.7576, -0.0873, -0.8727, -0.2618,
+      -2.618, -0.52, -0.52,
+      -3.0892, -1.5882, -2.618, -1.0472, -1.9722, -1.6144, -1.6144,
+      -3.0892, -2.2515, -2.618, -1.0472, -1.9722, -1.6144, -1.6144]
+    position_upper: [
+      2.8798, 2.9671, 2.7576, 2.8798, 0.5236, 0.2618,
+      2.8798, 0.5236, 2.7576, 2.8798, 0.5236, 0.2618,
+      2.618, 0.52, 0.52,
+      2.6704, 2.2515, 2.618, 2.0944, 1.9722, 1.6144, 1.6144,
+      2.6704, 1.5882, 2.618, 2.0944, 1.9722, 1.6144, 1.6144]
+    # Max |target - q| per command in rad (0 = disabled). With the relative
+    # action the policy offset is action * 0.6, so keep this >= 0.6 * typical
+    # |action| or it will change the trained behaviour.
+    max_target_delta: 0.0
+
+    # Damping applied when no fresh command arrives (kp = 0).
+    damping_kd: 1.0
+    command_timeout_s: 0.1
+
+    # Safety switch: nothing is published on lowcmd until this is true.
+    # Toggle at runtime: ros2 param set /g1_lowlevel_bridge enable_lowcmd true
+    enable_lowcmd: false
+    lowcmd_rate_hz: 500.0
+    mode_pr: 0  # 0 = PR (pitch/roll) mode for ankles and waist
+
+    lowstate_topic: /lowstate
+    lowcmd_topic: /lowcmd
+    imu_topic: /imu
+    joint_states_topic: /joint_states
+    command_topic: /getup/joint_command
+    imu_frame_id: imu_in_pelvis

@@ -1,0 +1,81 @@
+# Hyperparameters of the mjlab task "Pumas-Getup-Flat-Unitree-G1"
+# (mjlab-biped-playground/src/playground/tasks/getup). Keep in sync with the
+# training config; the ONNX metadata written by export_policy.py can be used
+# to cross-check joint_names / default_joint_pos / action_scale.
+getup_policy_node:
+  ros__parameters:
+    # Overridden by the launch argument policy_path.
+    policy_path: ""
+
+    # Policy joint order = order of joints in g1.xml (= Unitree motor index).
+    # Observations and actions use this order; commands are published with
+    # these names.
+    joint_names:
+      - left_hip_pitch_joint       # 0
+      - left_hip_roll_joint        # 1
+      - left_hip_yaw_joint         # 2
+      - left_knee_joint            # 3
+      - left_ankle_pitch_joint     # 4
+      - left_ankle_roll_joint      # 5
+      - right_hip_pitch_joint      # 6
+      - right_hip_roll_joint       # 7
+      - right_hip_yaw_joint        # 8
+      - right_knee_joint           # 9
+      - right_ankle_pitch_joint    # 10
+      - right_ankle_roll_joint     # 11
+      - waist_yaw_joint            # 12
+      - waist_roll_joint           # 13
+      - waist_pitch_joint          # 14
+      - left_shoulder_pitch_joint  # 15
+      - left_shoulder_roll_joint   # 16
+      - left_shoulder_yaw_joint    # 17
+      - left_elbow_joint           # 18
+      - left_wrist_roll_joint      # 19
+      - left_wrist_pitch_joint     # 20
+      - left_wrist_yaw_joint       # 21
+      - right_shoulder_pitch_joint # 22
+      - right_shoulder_roll_joint  # 23
+      - right_shoulder_yaw_joint   # 24
+      - right_elbow_joint          # 25
+      - right_wrist_roll_joint     # 26
+      - right_wrist_pitch_joint    # 27
+      - right_wrist_yaw_joint      # 28
+
+    # KNEES_BENT_KEYFRAME (g1_constants.py); joint_pos obs = q - default.
+    default_joint_pos: [
+      -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,    # left leg
+      -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,    # right leg
+      0.0, 0.0, 0.0,                           # waist
+      0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0,       # left arm
+      0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]      # right arm
+
+    # Actor observation terms, in the order of the "actor" group
+    # (getup_env_cfg.py). Supported: base_ang_vel, projected_gravity,
+    # joint_pos, joint_vel, actions.
+    observation_terms: [base_ang_vel, projected_gravity, joint_pos, joint_vel, actions]
+    # Per-term scale (ObservationTermCfg.scale); all 1.0 for this task.
+    observation_scales: [1.0, 1.0, 1.0, 1.0, 1.0]
+    num_obs: 93  # 3 + 3 + 29 + 29 + 29; checked against the terms and the model
+
+    # SettleRelativeJointPositionAction: target = q + action * action_scale.
+    # One value for all joints or one per joint.
+    action_scale: [0.6]
+    # Clamp raw actions to +-action_clip (rsl_rl clip_actions). 0 = disabled.
+    action_clip: 0.0
+    # Policy steps after start during which the robot holds its current
+    # position (env_cfgs.py: settle_steps = 50 -> 1 s at 50 Hz).
+    settle_steps: 50
+
+    # sim dt 0.005 * decimation 4 -> 50 Hz policy. The relative target is
+    # re-evaluated at the physics rate (200 Hz) in mjlab.
+    policy_rate_hz: 50.0
+    command_rate_hz: 200.0
+    num_threads: 1
+
+    # Runtime.
+    data_timeout_s: 0.1
+    auto_start: false
+    publish_debug: true
+    imu_topic: /imu
+    joint_states_topic: /joint_states
+    command_topic: /getup/joint_command
