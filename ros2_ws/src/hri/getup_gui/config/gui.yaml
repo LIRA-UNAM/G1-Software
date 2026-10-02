@@ -1,0 +1,9 @@
+getup_gui_bridge:
+  ros__parameters:
+    host: 0.0.0.0
+    port: 8082
+    policy_node: /getup_policy_node
+    bridge_node: /g1_lowlevel_bridge
+    # Must match estop_topic / heartbeat_topic of the getup nodes.
+    estop_topic: /getup/estop
+    heartbeat_topic: /getup/heartbeat

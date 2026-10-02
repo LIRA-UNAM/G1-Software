@@ -40,7 +40,7 @@ ament_target_dependencies(getup_policy_node rclcpp sensor_msgs std_msgs std_srvs
 
 add_executable(g1_lowlevel_bridge src/g1_lowlevel_bridge.cpp)
 target_link_libraries(g1_lowlevel_bridge getup_core)
-ament_target_dependencies(g1_lowlevel_bridge rclcpp sensor_msgs)
+ament_target_dependencies(g1_lowlevel_bridge rclcpp sensor_msgs std_msgs std_srvs)
 
 install(TARGETS getup_core
   ARCHIVE DESTINATION lib

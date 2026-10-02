@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>G1 Getup Control</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div id="conn-lost" class="conn-lost" hidden>
+  CONNECTION LOST &mdash; the dead-man will e-stop the robot if motor output is enabled. Reconnecting&hellip;
+</div>
+
+<header class="topbar">
+  <div class="title">
+    <h1>G1 Getup &mdash; Control &amp; Live Parameters</h1>
+    <span id="status" class="status">connecting&hellip;</span>
+  </div>
+  <button id="estop" class="estop" title="Emergency stop (Space / Esc)">E-STOP</button>
+</header>
+
+<section id="state" class="state state-offline">
+  <div class="state-main">
+    <span class="state-label">Bridge</span>
+    <span id="bridge-state" class="state-value">offline</span>
+    <span id="estop-reason" class="state-reason"></span>
+  </div>
+  <div class="state-grid">
+    <div><span>Policy</span><b id="policy-mode">offline</b></div>
+    <div><span>Step</span><b id="policy-step">&mdash;</b></div>
+    <div><span>Motor output</span><b id="motor-output">&mdash;</b></div>
+    <div><span>Dead-man</span><b id="deadman">&mdash;</b></div>
+    <div><span>Sensor data</span><b id="data-fresh">&mdash;</b></div>
+    <div><span>lowstate age</span><b id="lowstate-age">&mdash;</b></div>
+    <div><span>Inference</span><b id="inference">&mdash;</b></div>
+    <div><span>Model</span><b id="model-path" class="path">&mdash;</b></div>
+  </div>
+  <div class="controls">
+    <button id="reset-estop" class="secondary">Reset e-stop</button>
+    <button id="policy-start" class="go">Start policy</button>
+    <button id="policy-stop" class="secondary">Stop policy</button>
+    <button id="motor-toggle" class="warn">Enable motor output</button>
+  </div>
+  <p class="hint">Space or Esc triggers the e-stop from anywhere on this page (Space is ignored while typing in a text field).</p>
+</section>
+
+<main class="columns">
+  <section class="panel panel-policy">
+    <div class="panel-header">
+      <h2>Policy <small id="policy-node"></small></h2>
+      <button class="refresh">Refresh</button>
+    </div>
+    <div id="params-policy" class="params"></div>
+    <h3>Observation scales</h3>
+    <div id="obs-scales" class="params"></div>
+    <h3>Model</h3>
+    <div class="model-row">
+      <input id="policy-path" type="text" spellcheck="false" placeholder="/abs/path/policy.onnx">
+      <button id="policy-reload" class="secondary">Load (policy stopped)</button>
+    </div>
+  </section>
+
+  <section class="panel panel-bridge">
+    <div class="panel-header">
+      <h2>Low-level bridge <small id="bridge-node"></small></h2>
+      <button class="refresh">Refresh</button>
+    </div>
+    <div id="params-bridge" class="params"></div>
+  </section>
+
+  <section class="panel panel-joints">
+    <div class="panel-header">
+      <h2>Per-joint parameters</h2>
+      <button class="refresh">Refresh</button>
+    </div>
+    <div id="joint-warning" class="warning" hidden></div>
+    <div class="table-wrap">
+      <table id="joint-table"></table>
+    </div>
+  </section>
+</main>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-box">
+    <p id="modal-text"></p>
+    <div class="modal-buttons">
+      <button id="modal-cancel" class="secondary">Cancel</button>
+      <button id="modal-ok" class="warn">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
