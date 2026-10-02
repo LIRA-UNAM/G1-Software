@@ -19,9 +19,15 @@ if(NOT ONNXRUNTIME_ROOT)
 
   include(FetchContent)
   set(_ort_name "onnxruntime-linux-${_ort_arch}-${ONNXRUNTIME_VERSION}")
+  # DOWNLOAD_EXTRACT_TIMESTAMP only exists since CMake 3.24 (older versions,
+  # e.g. 3.16 on Ubuntu 20.04 / Foxy, would parse it as part of the URL).
+  set(_ort_extra_args "")
+  if(NOT CMAKE_VERSION VERSION_LESS 3.24)
+    set(_ort_extra_args DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  endif()
   FetchContent_Declare(onnxruntime_prebuilt
     URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${_ort_name}.tgz"
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    ${_ort_extra_args}
   )
   FetchContent_MakeAvailable(onnxruntime_prebuilt)
   set(ONNXRUNTIME_ROOT "${onnxruntime_prebuilt_SOURCE_DIR}")

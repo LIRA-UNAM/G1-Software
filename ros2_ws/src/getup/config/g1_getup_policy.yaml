@@ -4,8 +4,10 @@
 # to cross-check joint_names / default_joint_pos / action_scale.
 getup_policy_node:
   ros__parameters:
-    # Overridden by the launch argument policy_path.
-    policy_path: ""
+    # policy_path and auto_start are intentionally NOT set here: they come
+    # from the launch arguments. On Foxy, node-specific keys in this file take
+    # precedence over launch/-p overrides, so listing them here would shadow
+    # the launch arguments.
 
     # Policy joint order = order of joints in g1.xml (= Unitree motor index).
     # Observations and actions use this order; commands are published with
@@ -74,7 +76,6 @@ getup_policy_node:
 
     # Runtime.
     data_timeout_s: 0.1
-    auto_start: false
     publish_debug: true
     imu_topic: /imu
     joint_states_topic: /joint_states

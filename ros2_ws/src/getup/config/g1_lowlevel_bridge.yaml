@@ -70,9 +70,11 @@ g1_lowlevel_bridge:
     damping_kd: 1.0
     command_timeout_s: 0.1
 
-    # Safety switch: nothing is published on lowcmd until this is true.
-    # Toggle at runtime: ros2 param set /g1_lowlevel_bridge enable_lowcmd true
-    enable_lowcmd: false
+    # Safety switch enable_lowcmd (default false: nothing is published on
+    # lowcmd) is intentionally NOT set here so the launch argument
+    # enable_lowcmd:=true is not shadowed (Foxy gives node-specific keys in
+    # this file precedence over launch/-p overrides). Toggle at runtime:
+    #   ros2 param set /g1_lowlevel_bridge enable_lowcmd true
     lowcmd_rate_hz: 500.0
     mode_pr: 0  # 0 = PR (pitch/roll) mode for ankles and waist
 
