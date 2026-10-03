@@ -40,7 +40,8 @@ TEST(OnnxPolicy, RejectsWrongObsSize)
 }
 
 // Optional: GETUP_POLICY_PATH=/path/to/g1_getup.onnx checks an exported
-// getup policy has the expected 93 -> 29 interface and runs.
+// getup policy has the getup observation layout (3 + 3 + 3 * num_joints,
+// e.g. 75 -> 23 for the 23-DoF G1) and runs.
 TEST(OnnxPolicy, ExportedGetupPolicy)
 {
   const char * path = std::getenv("GETUP_POLICY_PATH");
@@ -48,8 +49,8 @@ TEST(OnnxPolicy, ExportedGetupPolicy)
     GTEST_SKIP() << "GETUP_POLICY_PATH not set";
   }
   getup::OnnxPolicy policy(path);
-  ASSERT_EQ(policy.num_obs(), 93u);
-  ASSERT_EQ(policy.num_actions(), 29u);
-  const auto & out = policy.infer(std::vector<float>(93, 0.0f));
-  ASSERT_EQ(out.size(), 29u);
+  ASSERT_GT(policy.num_actions(), 0u);
+  ASSERT_EQ(policy.num_obs(), 6u + 3u * policy.num_actions());
+  const auto & out = policy.infer(std::vector<float>(policy.num_obs(), 0.0f));
+  ASSERT_EQ(out.size(), policy.num_actions());
 }

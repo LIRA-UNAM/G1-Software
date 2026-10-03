@@ -1,5 +1,7 @@
 // Bridge between the Unitree G1 low-level DDS interface (unitree_hg) and
-// generic ROS 2 messages.
+// generic ROS 2 messages. Bridged joint i is motor slot motor_indices[i]
+// (default: i), so variants with missing motors (e.g. the 23-DoF G1, without
+// waist roll/pitch and wrist pitch/yaw) map onto the 35-slot LowCmd/LowState.
 //
 //   /lowstate (unitree_hg/LowState) -> /imu (sensor_msgs/Imu)
 //                                    -> /joint_states (sensor_msgs/JointState)
@@ -48,9 +50,11 @@ public:
   G1LowLevelBridge()
   : Node("g1_lowlevel_bridge")
   {
-    // Motor index i <-> joint_names[i].
+    // joint_names[i] <-> motor slot motor_indices[i] (default: i).
     joint_names_ =
       declare_parameter<std::vector<std::string>>("joint_names", std::vector<std::string>{});
+    const auto motor_indices =
+      declare_parameter<std::vector<int64_t>>("motor_indices", std::vector<int64_t>{});
     kp_ = declare_parameter<std::vector<double>>("kp", std::vector<double>{});
     kd_ = declare_parameter<std::vector<double>>("kd", std::vector<double>{});
     damping_kd_ = declare_parameter<double>("damping_kd", 1.0);
@@ -79,6 +83,20 @@ public:
     const size_t n = joint_names_.size();
     if (n == 0 || n > kNumMotorSlots) {
       throw std::invalid_argument("joint_names must have 1..35 entries");
+    }
+    if (motor_indices.empty()) {
+      for (size_t i = 0; i < n; ++i) {
+        motor_index_.push_back(i);
+      }
+    } else {
+      std::set<int64_t> unique(motor_indices.begin(), motor_indices.end());
+      if (motor_indices.size() != n || unique.size() != n || *unique.begin() < 0 ||
+        *unique.rbegin() >= static_cast<int64_t>(kNumMotorSlots))
+      {
+        throw std::invalid_argument(
+                "motor_indices must have len(joint_names) unique entries in [0, 35)");
+      }
+      motor_index_.assign(motor_indices.begin(), motor_indices.end());
     }
     std::string error = validate_gains_and_limits(kp_, kd_, pos_lower_, pos_upper_);
     if (!error.empty()) {
@@ -193,7 +211,7 @@ private:
     const std::vector<rclcpp::Parameter> & params)
   {
     static const std::set<std::string> kReadOnly = {
-      "joint_names", "mode_pr", "lowcmd_rate_hz", "lowstate_topic", "lowcmd_topic", "imu_topic",
+      "joint_names", "motor_indices", "mode_pr", "lowcmd_rate_hz", "lowstate_topic", "lowcmd_topic", "imu_topic",
       "joint_states_topic", "command_topic", "estop_topic", "heartbeat_topic", "imu_frame_id"};
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = false;
@@ -315,7 +333,7 @@ private:
 
     joint_state_msg_.header.stamp = stamp;
     for (size_t i = 0; i < joint_names_.size(); ++i) {
-      const auto & m = msg.motor_state[i];
+      const auto & m = msg.motor_state[motor_index_[i]];
       q_[i] = m.q;
       joint_state_msg_.position[i] = m.q;
       joint_state_msg_.velocity[i] = m.dq;
@@ -394,17 +412,17 @@ private:
 
     lowcmd_.mode_pr = mode_pr_;
     lowcmd_.mode_machine = mode_machine_;
-    for (size_t i = 0; i < kNumMotorSlots; ++i) {
-      auto & m = lowcmd_.motor_cmd[i];
+    // Slots without a bridged joint (absent motors) are disabled.
+    for (auto & m : lowcmd_.motor_cmd) {
+      m.mode = 0;
+      m.q = 0.0f;
       m.dq = 0.0f;
       m.tau = 0.0f;
-      if (i >= joint_names_.size()) {
-        m.mode = 0;
-        m.q = 0.0f;
-        m.kp = 0.0f;
-        m.kd = 0.0f;
-        continue;
-      }
+      m.kp = 0.0f;
+      m.kd = 0.0f;
+    }
+    for (size_t i = 0; i < joint_names_.size(); ++i) {
+      auto & m = lowcmd_.motor_cmd[motor_index_[i]];
       m.mode = 1;
       if (tracking_) {
         double q = target_[i];
@@ -470,7 +488,8 @@ private:
   std::string imu_frame_id_;
 
   // State.
-  std::unordered_map<std::string, size_t> name_to_motor_;
+  std::unordered_map<std::string, size_t> name_to_motor_;  // joint name -> joint index
+  std::vector<size_t> motor_index_;  // joint index -> motor slot
   std::vector<double> q_;
   std::vector<double> target_;
   uint8_t mode_machine_{0};

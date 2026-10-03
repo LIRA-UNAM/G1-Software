@@ -1,4 +1,5 @@
-# Hyperparameters of the mjlab task "Pumas-Getup-Flat-Unitree-G1"
+# Hyperparameters of the mjlab task "Pumas-Getup-Flat-Unitree-G1" for the
+# 23-DoF G1 (23-DoF g1.xml; W&B run Pumanoids/mjlab_playground/mdg92xap).
 # (mjlab-biped-playground/src/playground/tasks/getup). Keep in sync with the
 # training config; the ONNX metadata written by export_policy.py can be used
 # to cross-check joint_names / default_joint_pos / action_scale.
@@ -9,9 +10,9 @@ getup_policy_node:
     # precedence over launch/-p overrides, so listing them here would shadow
     # the launch arguments.
 
-    # Policy joint order = order of joints in g1.xml (= Unitree motor index).
-    # Observations and actions use this order; commands are published with
-    # these names.
+    # Policy joint order = order of joints in the 23-DoF g1.xml (waist roll/pitch
+    # and wrist pitch/yaw do not exist). Observations and actions use this
+    # order; commands are published with these names.
     joint_names:
       - left_hip_pitch_joint       # 0
       - left_hip_roll_joint        # 1
@@ -26,30 +27,24 @@ getup_policy_node:
       - right_ankle_pitch_joint    # 10
       - right_ankle_roll_joint     # 11
       - waist_yaw_joint            # 12
-      - waist_roll_joint           # 13
-      - waist_pitch_joint          # 14
-      - left_shoulder_pitch_joint  # 15
-      - left_shoulder_roll_joint   # 16
-      - left_shoulder_yaw_joint    # 17
-      - left_elbow_joint           # 18
-      - left_wrist_roll_joint      # 19
-      - left_wrist_pitch_joint     # 20
-      - left_wrist_yaw_joint       # 21
-      - right_shoulder_pitch_joint # 22
-      - right_shoulder_roll_joint  # 23
-      - right_shoulder_yaw_joint   # 24
-      - right_elbow_joint          # 25
-      - right_wrist_roll_joint     # 26
-      - right_wrist_pitch_joint    # 27
-      - right_wrist_yaw_joint      # 28
+      - left_shoulder_pitch_joint  # 13
+      - left_shoulder_roll_joint   # 14
+      - left_shoulder_yaw_joint    # 15
+      - left_elbow_joint           # 16
+      - left_wrist_roll_joint      # 17
+      - right_shoulder_pitch_joint # 18
+      - right_shoulder_roll_joint  # 19
+      - right_shoulder_yaw_joint   # 20
+      - right_elbow_joint          # 21
+      - right_wrist_roll_joint     # 22
 
     # KNEES_BENT_KEYFRAME (g1_constants.py); joint_pos obs = q - default.
     default_joint_pos: [
       -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,    # left leg
       -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,    # right leg
-      0.0, 0.0, 0.0,                           # waist
-      0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0,       # left arm
-      0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]      # right arm
+      0.0,                                     # waist yaw
+      0.2, 0.2, 0.0, 0.6, 0.0,                 # left arm
+      0.2, -0.2, 0.0, 0.6, 0.0]                # right arm
 
     # Actor observation terms, in the order of the "actor" group
     # (getup_env_cfg.py). Supported: base_ang_vel, projected_gravity,
@@ -57,7 +52,7 @@ getup_policy_node:
     observation_terms: [base_ang_vel, projected_gravity, joint_pos, joint_vel, actions]
     # Per-term scale (ObservationTermCfg.scale); all 1.0 for this task.
     observation_scales: [1.0, 1.0, 1.0, 1.0, 1.0]
-    num_obs: 93  # 3 + 3 + 29 + 29 + 29; checked against the terms and the model
+    num_obs: 75  # 3 + 3 + 23 + 23 + 23; checked against the terms and the model
 
     # SettleRelativeJointPositionAction: target = q + action * action_scale.
     # One value for all joints or one per joint.

@@ -1,66 +1,64 @@
-# unitree_hg <-> sensor_msgs bridge for the G1 (29 DoF).
+# unitree_hg <-> sensor_msgs bridge for the 23-DoF G1.
 g1_lowlevel_bridge:
   ros__parameters:
-    # Motor index i <-> joint_names[i] (Unitree G1 29-DoF motor order).
+    # joint_names[i] is driven through LowCmd/LowState slot motor_indices[i].
+    # The 23-DoF G1 uses the 29-DoF slot layout with waist roll/pitch (13, 14)
+    # and wrist pitch/yaw (20, 21, 27, 28) absent; those slots get mode 0.
     joint_names:
-      - left_hip_pitch_joint       # 0
-      - left_hip_roll_joint        # 1
-      - left_hip_yaw_joint         # 2
-      - left_knee_joint            # 3
-      - left_ankle_pitch_joint     # 4
-      - left_ankle_roll_joint      # 5
-      - right_hip_pitch_joint      # 6
-      - right_hip_roll_joint       # 7
-      - right_hip_yaw_joint        # 8
-      - right_knee_joint           # 9
-      - right_ankle_pitch_joint    # 10
-      - right_ankle_roll_joint     # 11
-      - waist_yaw_joint            # 12
-      - waist_roll_joint           # 13
-      - waist_pitch_joint          # 14
-      - left_shoulder_pitch_joint  # 15
-      - left_shoulder_roll_joint   # 16
-      - left_shoulder_yaw_joint    # 17
-      - left_elbow_joint           # 18
-      - left_wrist_roll_joint      # 19
-      - left_wrist_pitch_joint     # 20
-      - left_wrist_yaw_joint       # 21
-      - right_shoulder_pitch_joint # 22
-      - right_shoulder_roll_joint  # 23
-      - right_shoulder_yaw_joint   # 24
-      - right_elbow_joint          # 25
-      - right_wrist_roll_joint     # 26
-      - right_wrist_pitch_joint    # 27
-      - right_wrist_yaw_joint      # 28
+      - left_hip_pitch_joint       #  0 -> motor 0
+      - left_hip_roll_joint        #  1 -> motor 1
+      - left_hip_yaw_joint         #  2 -> motor 2
+      - left_knee_joint            #  3 -> motor 3
+      - left_ankle_pitch_joint     #  4 -> motor 4
+      - left_ankle_roll_joint      #  5 -> motor 5
+      - right_hip_pitch_joint      #  6 -> motor 6
+      - right_hip_roll_joint       #  7 -> motor 7
+      - right_hip_yaw_joint        #  8 -> motor 8
+      - right_knee_joint           #  9 -> motor 9
+      - right_ankle_pitch_joint    # 10 -> motor 10
+      - right_ankle_roll_joint     # 11 -> motor 11
+      - waist_yaw_joint            # 12 -> motor 12
+      - left_shoulder_pitch_joint  # 13 -> motor 15
+      - left_shoulder_roll_joint   # 14 -> motor 16
+      - left_shoulder_yaw_joint    # 15 -> motor 17
+      - left_elbow_joint           # 16 -> motor 18
+      - left_wrist_roll_joint      # 17 -> motor 19
+      - right_shoulder_pitch_joint # 18 -> motor 22
+      - right_shoulder_roll_joint  # 19 -> motor 23
+      - right_shoulder_yaw_joint   # 20 -> motor 24
+      - right_elbow_joint          # 21 -> motor 25
+      - right_wrist_roll_joint     # 22 -> motor 26
+    motor_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+                    15, 16, 17, 18, 19, 22, 23, 24, 25, 26]
 
     # PD gains used in training (g1_constants.py: 10 Hz natural frequency,
     # damping ratio 2 on the reflected rotor inertia).
     kp: [
       40.1792, 99.0984, 40.1792, 99.0984, 28.5012, 28.5012,
       40.1792, 99.0984, 40.1792, 99.0984, 28.5012, 28.5012,
-      40.1792, 28.5012, 28.5012,
-      14.2506, 14.2506, 14.2506, 14.2506, 14.2506, 16.7783, 16.7783,
-      14.2506, 14.2506, 14.2506, 14.2506, 14.2506, 16.7783, 16.7783]
+      40.1792,
+      14.2506, 14.2506, 14.2506, 14.2506, 14.2506,
+      14.2506, 14.2506, 14.2506, 14.2506, 14.2506]
     kd: [
       2.5579, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144,
       2.5579, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144,
-      2.5579, 1.8144, 1.8144,
-      0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681,
-      0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681]
+      2.5579,
+      0.9072, 0.9072, 0.9072, 0.9072, 0.9072,
+      0.9072, 0.9072, 0.9072, 0.9072, 0.9072]
 
     # Joint ranges from g1.xml; targets are clamped to them.
     position_lower: [
       -2.5307, -0.5236, -2.7576, -0.0873, -0.8727, -0.2618,
       -2.5307, -2.9671, -2.7576, -0.0873, -0.8727, -0.2618,
-      -2.618, -0.52, -0.52,
-      -3.0892, -1.5882, -2.618, -1.0472, -1.9722, -1.6144, -1.6144,
-      -3.0892, -2.2515, -2.618, -1.0472, -1.9722, -1.6144, -1.6144]
+      -2.618,
+      -3.0892, -1.5882, -2.618, -1.0472, -1.9722,
+      -3.0892, -2.2515, -2.618, -1.0472, -1.9722]
     position_upper: [
       2.8798, 2.9671, 2.7576, 2.8798, 0.5236, 0.2618,
       2.8798, 0.5236, 2.7576, 2.8798, 0.5236, 0.2618,
-      2.618, 0.52, 0.52,
-      2.6704, 2.2515, 2.618, 2.0944, 1.9722, 1.6144, 1.6144,
-      2.6704, 1.5882, 2.618, 2.0944, 1.9722, 1.6144, 1.6144]
+      2.618,
+      2.6704, 2.2515, 2.618, 2.0944, 1.9722,
+      2.6704, 1.5882, 2.618, 2.0944, 1.9722]
     # Max |target - q| per command in rad (0 = disabled). With the relative
     # action the policy offset is action * 0.6, so keep this >= 0.6 * typical
     # |action| or it will change the trained behaviour.
@@ -69,6 +67,9 @@ g1_lowlevel_bridge:
     # Damping applied when no fresh command arrives (kp = 0).
     damping_kd: 1.0
     command_timeout_s: 0.1
+    # Dead-man: e-stop if the GUI heartbeat is missing this long while motor
+    # output is enabled (armed by the first heartbeat; 0 disables it).
+    heartbeat_timeout_s: 0.5
 
     # Safety switch enable_lowcmd (default false: nothing is published on
     # lowcmd) is intentionally NOT set here so the launch argument
@@ -76,7 +77,7 @@ g1_lowlevel_bridge:
     # this file precedence over launch/-p overrides). Toggle at runtime:
     #   ros2 param set /g1_lowlevel_bridge enable_lowcmd true
     lowcmd_rate_hz: 500.0
-    mode_pr: 0  # 0 = PR (pitch/roll) mode for ankles and waist
+    mode_pr: 0  # 0 = PR (pitch/roll) mode for the ankles
 
     lowstate_topic: /lowstate
     lowcmd_topic: /lowcmd
