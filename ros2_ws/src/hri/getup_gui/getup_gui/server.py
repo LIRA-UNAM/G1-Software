@@ -17,14 +17,22 @@ STATUS_PERIOD_SEC = 0.1
 
 
 class GetupGuiServer:
-    def __init__(self, bridge):
+    """aiohttp + WebSocket server for a GUI bridge node.
+
+    Also used by other GUIs (e.g. motion_recorder_gui): the bridge must provide
+    host/port, config(), heartbeat(), publish_estop(), status_snapshot() and
+    execute_command(command) (handling "estop_services"); static files are
+    served from <package_name>'s share directory.
+    """
+
+    def __init__(self, bridge, package_name="getup_gui"):
         self.bridge = bridge
         self.clients = set()
         # Blocking ROS calls run here; several workers so an e-stop
         # confirmation never waits behind a slow parameter read.
         self.workers = ThreadPoolExecutor(max_workers=4)
         self.app = web.Application(client_max_size=1024 * 1024)
-        self.static_dir = get_package_share_directory("getup_gui") + "/static"
+        self.static_dir = get_package_share_directory(package_name) + "/static"
         self.app.add_routes(
             [
                 web.get("/", self.index),
@@ -64,7 +72,7 @@ class GetupGuiServer:
                     await self._handle_message(ws, message.data)
                 elif message.type == WSMsgType.ERROR:
                     self.bridge.get_logger().warning(
-                        "getup_gui websocket error: {}".format(ws.exception())
+                        "websocket error: {}".format(ws.exception())
                     )
         finally:
             self.clients.discard(ws)
@@ -108,15 +116,22 @@ class GetupGuiServer:
                     self.clients.discard(ws)
 
 
-def main(args=None):
-    rclpy.init(args=args)
-    bridge = GetupGuiBridge()
+def run_server(bridge_cls, package_name, args=None):
+    """Spins bridge_cls() on a ROS thread and serves its GUI until SIGINT/SIGTERM."""
+    try:
+        # Let the asyncio loop below own SIGINT/SIGTERM so shutdown happens in
+        # order (rclpy's own handler would kill the ROS thread first).
+        from rclpy.signals import SignalHandlerOptions
+        rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+    except ImportError:  # Foxy: no signal handler options
+        rclpy.init(args=args)
+    bridge = bridge_cls()
     executor = MultiThreadedExecutor(num_threads=2)
     executor.add_node(bridge)
     ros_thread = threading.Thread(target=executor.spin, daemon=True)
     ros_thread.start()
 
-    server = GetupGuiServer(bridge)
+    server = GetupGuiServer(bridge, package_name)
     runner = web.AppRunner(server.app, access_log=None)
 
     async def run():
@@ -124,7 +139,7 @@ def main(args=None):
         site = web.TCPSite(runner, bridge.host, bridge.port)
         await site.start()
         bridge.get_logger().info(
-            "getup GUI available at http://{}:{}".format(bridge.host, bridge.port)
+            "{} available at http://{}:{}".format(package_name, bridge.host, bridge.port)
         )
         status_task = asyncio.ensure_future(server.status_loop())
         stop_event = asyncio.Event()
@@ -148,6 +163,10 @@ def main(args=None):
         bridge.destroy_node()
         rclpy.shutdown()
         ros_thread.join(timeout=2.0)
+
+
+def main(args=None):
+    run_server(GetupGuiBridge, "getup_gui", args)
 
 
 if __name__ == "__main__":

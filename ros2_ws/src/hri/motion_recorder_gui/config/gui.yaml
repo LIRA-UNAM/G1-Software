@@ -1,0 +1,8 @@
+motion_recorder_gui_bridge:
+  ros__parameters:
+    host: 0.0.0.0
+    port: 8083
+    recorder_node: /motion_recorder
+    bridge_node: /g1_lowlevel_bridge
+    estop_topic: /getup/estop
+    heartbeat_topic: /getup/heartbeat

@@ -9,6 +9,8 @@ GETUP_LAUNCH := surge_et_ambula getup.launch.py
 #   make getup POLICY=/abs/path/model.onnx GETUP_ARGS="enable_lowcmd:=true"
 POLICY ?= $(HOME)/getup_models/g1_getup.onnx
 GETUP_ARGS ?=
+# Launch options for `make motion`, e.g. MOTION_ARGS="enable_lowcmd:=true"
+MOTION_ARGS ?=
 
 # Default target to clean, build, start roscore, and launch both projects
 all: build
@@ -28,4 +30,9 @@ getup:
 	@echo "Launching getup policy + GUI..."
 	cd $(ROOMIE_PROJECT_PATH) && source install/setup.bash && ros2 launch $(GETUP_LAUNCH) policy_path:=$(POLICY) $(GETUP_ARGS)
 
-.PHONY: all clean build getup
+# Launch the bridge, motion recorder and its GUI (http://<robot-ip>:8083)
+motion:
+	@echo "Launching motion recorder + GUI..."
+	cd $(ROOMIE_PROJECT_PATH) && source install/setup.bash && ros2 launch surge_et_ambula motion.launch.py $(MOTION_ARGS)
+
+.PHONY: all clean build getup motion

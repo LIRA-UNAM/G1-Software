@@ -1,0 +1,25 @@
+motion_recorder:
+  ros__parameters:
+    recordings_dir: ~/motion_recordings
+    record_rate_hz: 20.0
+    # Playback interpolates between recorded frames at this rate (the bridge
+    # needs a command at least every command_timeout_s).
+    command_rate_hz: 100.0
+    joint_states_topic: /joint_states
+    command_topic: /getup/joint_command
+    estop_topic: /getup/estop
+    bridge_node: /g1_lowlevel_bridge
+    # Safe moves to/from the recording's start pose: cosine profile with peak
+    # joint speed <= approach_max_vel, never shorter than approach_min_duration_s.
+    approach_max_vel: 0.3
+    approach_min_duration_s: 2.0
+    # Recordings faster than this (frame to frame) are refused.
+    max_recorded_vel: 4.0
+    data_timeout_s: 0.2
+    # Bridge damping_kd while recording (teach mode), restored afterwards.
+    teach_damping_kd: 0.3
+    joint_groups:
+      - "legs:.*_(hip|knee|ankle)_.*"
+      - "waist:waist_.*"
+      - "left_arm:left_(shoulder|elbow|wrist)_.*"
+      - "right_arm:right_(shoulder|elbow|wrist)_.*"

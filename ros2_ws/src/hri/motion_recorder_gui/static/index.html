@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>G1 Motion Recorder</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div id="conn-lost" class="conn-lost" hidden>
+  CONNECTION LOST &mdash; the dead-man will e-stop the robot if motor output is enabled. Reconnecting&hellip;
+</div>
+
+<header class="topbar">
+  <div class="title">
+    <h1>G1 Motion Recorder</h1>
+    <span id="status" class="status">connecting&hellip;</span>
+  </div>
+  <button id="estop" class="estop" title="Emergency stop (Space / Esc)">E-STOP</button>
+</header>
+
+<section id="state" class="state state-offline">
+  <div class="state-main">
+    <span class="state-label">Recorder</span>
+    <span id="rec-state" class="state-value">offline</span>
+    <span id="rec-message" class="state-reason"></span>
+  </div>
+  <div class="progress"><div id="progress-bar"></div></div>
+  <div class="state-grid">
+    <div><span>Bridge</span><b id="bridge-state">offline</b></div>
+    <div><span>Motor output</span><b id="motor-output">&mdash;</b></div>
+    <div><span>Dead-man</span><b id="deadman">&mdash;</b></div>
+    <div><span>Joint data</span><b id="data-fresh">&mdash;</b></div>
+    <div><span>Joints</span><b id="joints">&mdash;</b></div>
+    <div><span>Last take</span><b id="last-take" class="path">&mdash;</b></div>
+  </div>
+  <div class="controls">
+    <button id="motor-toggle" class="warn">Enable motor output</button>
+  </div>
+  <p class="hint">Space or Esc triggers the e-stop from anywhere on this page (Space is ignored while typing in a text field).</p>
+</section>
+
+<main class="columns">
+  <section class="panel panel-record">
+    <div class="panel-header"><h2>Record</h2></div>
+    <div class="params">
+      <div class="param-row">
+        <label for="rec-name">Name (empty = timestamp)</label>
+        <input id="rec-name" type="text" spellcheck="false" placeholder="wave_left">
+      </div>
+      <div class="param-row">
+        <label for="teach-kd" title="Bridge damping while recording; lower = easier to move by hand">Teach damping Kd</label>
+        <input id="teach-kd" type="number" min="0" max="5" step="0.05" value="0.3">
+      </div>
+    </div>
+    <div class="controls big">
+      <button id="record" class="rec">&#9679; Record</button>
+      <button id="discard" class="secondary">Discard last take</button>
+    </div>
+    <p class="hint">Teach mode: with motor output enabled the bridge only damps the joints while recording, so the limbs can be guided by hand. Joints are sampled at 20 Hz.</p>
+  </section>
+
+  <section class="panel panel-play">
+    <div class="panel-header"><h2>Playback</h2></div>
+    <div class="params">
+      <div class="param-row">
+        <label for="recording">Recording</label>
+        <select id="recording"><option value="">(none)</option></select>
+      </div>
+      <div class="param-row">
+        <label>Joint groups</label>
+        <div id="groups" class="groups"></div>
+      </div>
+    </div>
+    <div class="controls big">
+      <button id="play" class="go">&#9654; Play</button>
+      <button id="pause" class="secondary">Stop</button>
+      <button id="reset" class="warn">Reset</button>
+      <button id="release" class="secondary">Release</button>
+    </div>
+    <p class="hint">Play moves slowly to the recording's start pose, replays it at the recorded rate, then returns slowly to the start pose and holds. Unselected groups hold their position. Reset clears the e-stop and returns to the start pose. Release lets the bridge damp the joints.</p>
+  </section>
+</main>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-box">
+    <p id="modal-text"></p>
+    <div class="modal-buttons">
+      <button id="modal-cancel" class="secondary">Cancel</button>
+      <button id="modal-ok" class="warn">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

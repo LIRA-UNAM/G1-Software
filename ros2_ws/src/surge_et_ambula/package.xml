@@ -3,7 +3,7 @@
 <package format="3">
   <name>surge_et_ambula</name>
   <version>0.0.0</version>
-  <description>Top-level launch for the G1 getup ("rise and walk") stack: low-level bridge, getup policy and the e-stop / live-parameter web GUI.</description>
+  <description>Top-level launch for the G1 getup ("rise and walk") stack: low-level bridge, getup policy and the e-stop / live-parameter web GUI, plus the motion recorder.</description>
   <maintainer email="garcia.miguel.onate@gmail.com">Miguel Garcia</maintainer>
   <license>MIT</license>
 
@@ -11,6 +11,8 @@
 
   <exec_depend>getup</exec_depend>
   <exec_depend>getup_gui</exec_depend>
+  <exec_depend>motion_recorder</exec_depend>
+  <exec_depend>motion_recorder_gui</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 
