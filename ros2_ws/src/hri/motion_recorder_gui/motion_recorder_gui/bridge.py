@@ -88,10 +88,13 @@ class MotionRecorderGuiBridge(Node):
         if action == "estop_services":
             return self._estop_services()
         if action == "record_start":
-            self._set("recorder", {
+            params = {
                 "recording_name": ("string", command.get("name") or ""),
                 "teach_damping_kd": ("double", command.get("teach_damping_kd", 0.3)),
-            })
+            }
+            if command.get("groups"):
+                params["record_groups"] = ("string_array", command["groups"])
+            self._set("recorder", params)
             return self._trigger("record_start")
         if action in ("play", "reset"):
             params = {"selected_recording": ("string", command.get("file") or "")}

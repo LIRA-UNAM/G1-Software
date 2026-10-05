@@ -33,6 +33,7 @@
     <div><span>Joint data</span><b id="data-fresh">&mdash;</b></div>
     <div><span>Joints</span><b id="joints">&mdash;</b></div>
     <div><span>Last take</span><b id="last-take" class="path">&mdash;</b></div>
+    <div class="wide"><span>Offline motors</span><b id="offline" class="path">&mdash;</b></div>
   </div>
   <div class="controls">
     <button id="motor-toggle" class="warn">Enable motor output</button>
@@ -52,12 +53,16 @@
         <label for="teach-kd" title="Bridge damping while recording; lower = easier to move by hand">Teach damping Kd</label>
         <input id="teach-kd" type="number" min="0" max="5" step="0.05" value="0.3">
       </div>
+      <div class="param-row">
+        <label>Limbs to record</label>
+        <div id="record-groups" class="groups"></div>
+      </div>
     </div>
     <div class="controls big">
       <button id="record" class="rec">&#9679; Record</button>
       <button id="discard" class="secondary">Discard last take</button>
     </div>
-    <p class="hint">Teach mode: with motor output enabled the bridge only damps the joints while recording, so the limbs can be guided by hand. Joints are sampled at 20 Hz.</p>
+    <p class="hint">Teach mode: with motor output enabled the bridge only damps the joints while recording, so the limbs can be guided by hand. Only the checked limbs are sampled (20 Hz). Limbs tagged <span class="tag">offline</span> have motors without power or comms: their data would be junk.</p>
   </section>
 
   <section class="panel panel-play">
@@ -78,7 +83,7 @@
       <button id="reset" class="warn">Reset</button>
       <button id="release" class="secondary">Release</button>
     </div>
-    <p class="hint">Play moves slowly to the recording's start pose, replays it at the recorded rate, then returns slowly to the start pose and holds. Unselected groups hold their position. Reset clears the e-stop and returns to the start pose. Release lets the bridge damp the joints.</p>
+    <p class="hint">Only groups contained in the selected recording can be played. Play moves slowly to the recording's start pose, replays it at the recorded rate, then returns slowly to the start pose and holds. Unselected groups hold their position. Reset clears the e-stop and returns to the start pose. Release lets the bridge damp the joints.</p>
   </section>
 </main>
 

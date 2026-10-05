@@ -158,6 +158,9 @@ def run_server(bridge_cls, package_name, args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        # Shutdown has started: further SIGINTs (e.g. launch escalating) must
+        # not interrupt the cleanup below.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         server.workers.shutdown(wait=False)
         executor.shutdown()
         bridge.destroy_node()

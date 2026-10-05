@@ -49,3 +49,28 @@ def test_valid_name():
     assert storage.valid_name("wave_01-a")
     assert not storage.valid_name("../etc")
     assert not storage.valid_name("")
+
+
+def test_v2_groups_and_online(tmp_path):
+    t = np.arange(3) * 0.05
+    q = np.zeros((3, 2))
+    online = [[True, True], [True, False], [True, True]]
+    r = storage.make_recording(["a", "b"], 20.0, t, q, q, q, "now", online=online, groups=["left_arm"])
+    rec = storage.load_recording(storage.save_recording(str(tmp_path), "sub", r))
+    assert rec["format_version"] == 2 and rec["groups"] == ["left_arm"]
+    assert rec["online"].dtype == bool and not rec["online"][1, 1]
+    listing = storage.RecordingIndex(str(tmp_path)).list()
+    assert listing[0]["groups"] == ["left_arm"]
+
+
+def test_v1_files_still_load(tmp_path):
+    v1 = make(4)
+    v1["format_version"] = 1
+    del v1["online"], v1["groups"]
+    v1["q"][:, 0] = 0.0  # joint "a" recorded while its motor was offline
+    v1["q"][:, 1:] += 0.1
+    path = tmp_path / "old.pkl"
+    path.write_bytes(pickle.dumps(v1, protocol=4))
+    rec = storage.load_recording(str(path))
+    assert rec["groups"] is None and rec["online"].shape == (4, 3)
+    assert not rec["online"][:, 0].any() and rec["online"][:, 1:].all()

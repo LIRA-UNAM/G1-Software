@@ -461,3 +461,21 @@ select {
   flex-wrap: wrap;
   gap: 0.4rem 1rem;
 }
+
+.tag {
+  margin-left: 0.3rem;
+  padding: 0 0.35rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: white;
+  background: var(--red);
+}
+
+.groups label.unavailable {
+  opacity: 0.4;
+}
+
+.state-grid .wide {
+  grid-column: 1 / -1;
+}

@@ -14,6 +14,11 @@
 // `ros2 param set`). The robot must be in debug mode (high-level motion
 // control released) before enabling it.
 //
+// Offline motors (no voltage or motorstate bit 31, e.g. a disconnected arm)
+// are never tracked: they get damping only. A joint that goes offline during a
+// tracking session stays passive until the next session starts, so a motor
+// that reconnects mid-motion does not jump to a stale target.
+//
 // Emergency stop: a latched e-stop (~/estop service, /getup/estop topic or
 // loss of the GUI heartbeat on /getup/heartbeat) forces damping regardless of
 // incoming commands until ~/reset_estop is called. Gains, limits and timeouts
@@ -108,6 +113,9 @@ public:
 
     q_.assign(n, 0.0);
     target_.assign(n, 0.0);
+    online_.assign(n, false);
+    seen_offline_.assign(n, true);
+    passive_.assign(n, true);
     joint_state_msg_.name = joint_names_;
     joint_state_msg_.position.assign(n, 0.0);
     joint_state_msg_.velocity.assign(n, 0.0);
@@ -179,6 +187,7 @@ public:
 
 private:
   static constexpr size_t kNumMotorSlots = 35;
+  static constexpr uint32_t kMotorOfflineBit = 0x80000000u;
 
   std::string validate_gains_and_limits(
     const std::vector<double> & kp, const std::vector<double> & kd,
@@ -334,6 +343,9 @@ private:
     joint_state_msg_.header.stamp = stamp;
     for (size_t i = 0; i < joint_names_.size(); ++i) {
       const auto & m = msg.motor_state[motor_index_[i]];
+      online_[i] = m.vol > 0.0f && (m.motorstate & kMotorOfflineBit) == 0;
+      // Flapping motors drop out between status messages: remember any dropout.
+      seen_offline_[i] = seen_offline_[i] || !online_[i];
       q_[i] = m.q;
       joint_state_msg_.position[i] = m.q;
       joint_state_msg_.velocity[i] = m.dq;
@@ -404,10 +416,24 @@ private:
     }
     const bool track = !estop_ && fresh(last_command_, command_timeout_) &&
       fresh(last_lowstate_, command_timeout_);
+    if (track && !tracking_) {
+      // New tracking session: only joints that are online now take part.
+      for (size_t i = 0; i < passive_.size(); ++i) {
+        passive_[i] = !online_[i];
+      }
+    }
     if (track != tracking_) {
       tracking_ = track;
       RCLCPP_WARN(
         get_logger(), "%s", tracking_ ? "Tracking joint commands" : "Damping (no command / e-stop)");
+    }
+    for (size_t i = 0; i < passive_.size(); ++i) {
+      if (tracking_ && !online_[i] && !passive_[i]) {
+        RCLCPP_ERROR(
+          get_logger(), "Motor %s went offline: passive until the next session",
+          joint_names_[i].c_str());
+      }
+      passive_[i] = passive_[i] || !online_[i];
     }
 
     lowcmd_.mode_pr = mode_pr_;
@@ -424,7 +450,7 @@ private:
     for (size_t i = 0; i < joint_names_.size(); ++i) {
       auto & m = lowcmd_.motor_cmd[motor_index_[i]];
       m.mode = 1;
-      if (tracking_) {
+      if (tracking_ && !passive_[i]) {
         double q = target_[i];
         if (max_target_delta_ > 0.0) {
           q = std::clamp(q, q_[i] - max_target_delta_, q_[i] + max_target_delta_);
@@ -468,9 +494,29 @@ private:
       state, estop_ ? "true" : "false", reason.c_str(), enable_lowcmd_ ? "true" : "false",
       (heartbeat_timeout_ > 0.0 && last_heartbeat_) ? "true" : "false", heartbeat_timeout_,
       age(last_lowstate_), age(last_command_), age(last_heartbeat_), mode_machine_);
+    std::string json = buf;
+    json.pop_back();  // drop the closing brace, then append the joint lists
+    // Joints offline at any sample since the last status (catches flapping).
+    json += ",\"offline_joints\":" + name_list(seen_offline_, true) +
+      ",\"passive_joints\":" + (tracking_ ? name_list(passive_, true) : std::string("[]")) + "}";
     std_msgs::msg::String msg;
-    msg.data = buf;
+    msg.data = json;
     status_pub_->publish(msg);
+    for (size_t i = 0; i < seen_offline_.size(); ++i) {
+      seen_offline_[i] = !online_[i];
+    }
+  }
+
+  // JSON list of the joint names whose flag equals `value`.
+  std::string name_list(const std::vector<bool> & flags, bool value) const
+  {
+    std::string out = "[";
+    for (size_t i = 0; i < flags.size(); ++i) {
+      if (flags[i] == value) {
+        out += (out.size() > 1 ? ",\"" : "\"") + joint_names_[i] + "\"";
+      }
+    }
+    return out + "]";
   }
 
   // Parameters.
@@ -490,6 +536,9 @@ private:
   // State.
   std::unordered_map<std::string, size_t> name_to_motor_;  // joint name -> joint index
   std::vector<size_t> motor_index_;  // joint index -> motor slot
+  std::vector<bool> online_;  // motor reports voltage and no offline flag
+  std::vector<bool> seen_offline_;  // offline at any sample since the last status
+  std::vector<bool> passive_;  // excluded from the current tracking session
   std::vector<double> q_;
   std::vector<double> target_;
   uint8_t mode_machine_{0};

@@ -58,3 +58,21 @@ def test_validate_ok_and_reorder():
 def test_validate_rejects(r, match):
     with pytest.raises(ValueError, match=match):
         validate_recording(r, NAMES, max_vel=4.0)
+
+
+def test_glitch_on_unplayed_joint_does_not_block():
+    # Joint "c" glitches (20 rad/s); playing only a and b is fine.
+    r = rec([0, 0.05, 0.1], [[0, 0, 0], [0.01, 0, 1.0], [0.02, 0, 0]])
+    validate_recording(r, ["a", "b"], max_vel=4.0)
+    with pytest.raises(ValueError, match="on c"):
+        validate_recording(r, ["a", "c"], max_vel=4.0)
+
+
+def test_subset_recording_and_offline_frames():
+    r = rec([0, 0.05, 0.1], [[0, 0], [0, 0], [0, 0]], names=["a", "b"])
+    r["online"] = np.array([[True, True], [True, False], [True, True]])
+    validate_recording(r, ["a"], max_vel=4.0)  # b not played
+    with pytest.raises(ValueError, match="offline during the take: b"):
+        validate_recording(r, ["a", "b"], max_vel=4.0)
+    with pytest.raises(ValueError, match="no joints"):
+        validate_recording(r, [], max_vel=4.0)

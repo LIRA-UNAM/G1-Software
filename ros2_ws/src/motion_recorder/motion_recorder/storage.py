@@ -7,7 +7,10 @@ import tempfile
 
 import numpy as np
 
-FORMAT_VERSION = 1
+# v2 adds "groups" and the per-frame "online" mask; v1 files (all joints,
+# no mask) are still loaded.
+FORMAT_VERSION = 2
+SUPPORTED_VERSIONS = (1, 2)
 # Protocol 4: readable by Python 3.8 (robot) and newer (laptop).
 PICKLE_PROTOCOL = 4
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -47,17 +50,26 @@ def load_recording(path):
     # Only load recordings you created: unpickling runs arbitrary code.
     with open(path, "rb") as f:
         rec = pickle.load(f)
-    if not isinstance(rec, dict) or rec.get("format_version") != FORMAT_VERSION:
-        raise ValueError("%s is not a motion_recorder v%d file" % (path, FORMAT_VERSION))
+    if not isinstance(rec, dict) or rec.get("format_version") not in SUPPORTED_VERSIONS:
+        raise ValueError("%s is not a motion_recorder recording" % path)
+    if "online" not in rec:
+        # v1 recorded no motor status. Offline motors report exactly 0.0, which
+        # a live encoder practically never does, so use that as the mask.
+        rec["online"] = np.asarray(rec["q"], float) != 0.0
+    rec.setdefault("groups", None)  # None: all groups
     return rec
 
 
-def make_recording(joint_names, rate_hz, t, q, dq, tau, created):
+def make_recording(joint_names, rate_hz, t, q, dq, tau, created, online=None, groups=None):
     q = np.asarray(q, float)
     return {
         "format_version": FORMAT_VERSION,
         "robot": "g1_23dof",
         "joint_names": list(joint_names),
+        "groups": list(groups) if groups is not None else None,
+        # online[k, j]: motor j reported voltage and no offline flag at frame k.
+        "online": (np.asarray(online, dtype=bool) if online is not None
+                   else np.ones(q.shape, dtype=bool)),
         "rate_hz": float(rate_hz),
         "created": created,
         "duration_s": float(t[-1] - t[0]) if len(t) else 0.0,
@@ -93,7 +105,8 @@ class RecordingIndex:
                 try:
                     rec = load_recording(path)
                     summary = {"name": name, "duration_s": round(rec["duration_s"], 2),
-                               "frames": int(len(rec["t"])), "created": rec.get("created", "")}
+                               "frames": int(len(rec["t"])), "created": rec.get("created", ""),
+                               "groups": rec["groups"]}
                 except Exception as exc:  # noqa: B902 - any unreadable file is just flagged
                     summary = {"name": name, "error": str(exc)[:80]}
                 cached = (mtime, summary)

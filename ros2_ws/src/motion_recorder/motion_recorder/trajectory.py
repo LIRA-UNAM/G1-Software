@@ -40,24 +40,41 @@ def interp_frames(t_frames, q_frames, t):
 
 
 def validate_recording(rec, joint_names, max_vel):
-    """Raises ValueError if a recording cannot be played on these joints."""
+    """Raises ValueError if the recording cannot drive these (played) joints.
+
+    Only the given joints are checked, so a glitching limb that is not played
+    does not block the others.
+    """
+    if not joint_names:
+        raise ValueError("no joints to play")
     missing = [n for n in joint_names if n not in rec["joint_names"]]
     if missing:
         raise ValueError("recording lacks joints: " + ", ".join(missing))
     t = np.asarray(rec["t"], float)
-    q = np.asarray(rec["q"], float)
+    q_all = np.asarray(rec["q"], float)
     if t.ndim != 1 or len(t) < 2:
         raise ValueError("recording needs at least 2 frames")
-    if q.shape != (len(t), len(rec["joint_names"])):
-        raise ValueError("q has shape %s, expected %s" % (q.shape, (len(t), len(rec["joint_names"]))))
+    if q_all.shape != (len(t), len(rec["joint_names"])):
+        raise ValueError("q has shape %s, expected %s"
+                         % (q_all.shape, (len(t), len(rec["joint_names"]))))
+    index = [rec["joint_names"].index(n) for n in joint_names]
+    q = q_all[:, index]
+    online = rec.get("online")
+    if online is not None:
+        offline = [n for n, ok in zip(joint_names, np.asarray(online, bool)[:, index].all(axis=0))
+                   if not ok]
+        if offline:
+            raise ValueError("motors were offline during the take: " + ", ".join(offline))
     if not np.all(np.isfinite(q)) or not np.all(np.isfinite(t)):
         raise ValueError("recording contains NaN/inf")
     dt = np.diff(t)
     if np.any(dt <= 0.0):
         raise ValueError("recording timestamps are not strictly increasing")
-    vel = np.max(np.abs(np.diff(q, axis=0)) / dt[:, None])
-    if vel > max_vel:
-        raise ValueError("recording moves at %.2f rad/s (> max_recorded_vel %.2f)" % (vel, max_vel))
+    vel = np.abs(np.diff(q, axis=0)) / dt[:, None]
+    if vel.max() > max_vel:
+        worst = joint_names[int(np.argmax(vel.max(axis=0)))]
+        raise ValueError("recording moves at %.2f rad/s on %s (> max_recorded_vel %.2f)"
+                         % (vel.max(), worst, max_vel))
 
 
 def reorder(rec, joint_names):

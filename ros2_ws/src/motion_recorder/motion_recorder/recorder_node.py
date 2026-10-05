@@ -71,6 +71,7 @@ class MotionRecorder(Node):
         self.declare_parameter("recording_name", "")
         self.declare_parameter("selected_recording", "")
         self.declare_parameter("play_groups", ["legs", "waist", "left_arm", "right_arm"])
+        self.declare_parameter("record_groups", ["legs", "waist", "left_arm", "right_arm"])
 
         p = lambda name: self.get_parameter(name).value  # noqa: E731
         self.recordings_dir = os.path.expanduser(p("recordings_dir"))
@@ -97,6 +98,8 @@ class MotionRecorder(Node):
         self.saved_damping_kd = None
         self.recordings = []
         self._listing_time = 0.0
+        self.offline = set()  # joints the bridge reports offline (no voltage / fault)
+        self.bridge_status_time = None
 
         reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(JointState, p("joint_states_topic"), self._on_joint_state,
@@ -107,6 +110,7 @@ class MotionRecorder(Node):
         self.status_pub = self.create_publisher(String, "~/status", 10)
 
         bridge = p("bridge_node")
+        self.create_subscription(String, bridge + "/status", self._on_bridge_status, 10)
         self.bridge_get = self.create_client(GetParameters, bridge + "/get_parameters")
         self.bridge_set = self.create_client(SetParameters, bridge + "/set_parameters")
         self.bridge_reset = self.create_client(Trigger, bridge + "/reset_estop")
@@ -152,12 +156,12 @@ class MotionRecorder(Node):
                                                reason="selected_recording must be a .pkl file name")
                 if not os.path.exists(os.path.join(self.recordings_dir, v)):
                     return SetParametersResult(successful=False, reason="no such recording: " + v)
-            if prm.name == "play_groups":
+            if prm.name in ("play_groups", "record_groups"):
                 unknown = [g for g in (v or []) if g not in self.groups]
                 if unknown or not v:
                     return SetParametersResult(
                         successful=False,
-                        reason="play_groups must be a non-empty subset of %s" % list(self.groups))
+                        reason="%s must be a non-empty subset of %s" % (prm.name, list(self.groups)))
             if prm.name in ("recordings_dir", "record_rate_hz", "command_rate_hz", "joint_groups",
                             "joint_states_topic", "command_topic", "estop_topic", "bridge_node"):
                 return SetParametersResult(successful=False, reason=prm.name + " is read-only")
@@ -180,6 +184,21 @@ class MotionRecorder(Node):
         self.dq = np.asarray(msg.velocity, float) if len(msg.velocity) == n else np.zeros(n)
         self.tau = np.asarray(msg.effort, float) if len(msg.effort) == n else np.zeros(n)
         self.last_js = time.monotonic()
+
+    def _on_bridge_status(self, msg):
+        try:
+            self.offline = set(json.loads(msg.data).get("offline_joints", []))
+            self.bridge_status_time = time.monotonic()
+        except ValueError:
+            pass
+
+    def _group_mask(self, groups):
+        """Boolean mask over self.joint_names for the given group names."""
+        return np.array([any(self.groups[g].fullmatch(n) for g in groups)
+                         for n in self.joint_names])
+
+    def _offline_groups(self):
+        return [g for g, rx in self.groups.items() if any(rx.fullmatch(n) for n in self.offline)]
 
     def _data_fresh(self):
         return self.last_js is not None and time.monotonic() - self.last_js < self._p("data_timeout_s")
@@ -219,17 +238,24 @@ class MotionRecorder(Node):
             raise RuntimeError("cannot record while %s" % self.state)
         if not self._data_fresh():
             raise RuntimeError("no fresh /joint_states")
+        groups = list(self._p("record_groups"))
+        index = np.flatnonzero(self._group_mask(groups))
+        if not len(index):
+            raise RuntimeError("record_groups select no joints")
         # Stop commanding so the bridge streams (teach) damping.
         self.state = RECORDING
         self.target = None
-        self.buffer = {"t0": time.monotonic(), "t": [], "q": [], "dq": [], "tau": [],
-                       "names": list(self.joint_names),
+        self.buffer = {"t0": time.monotonic(), "t": [], "q": [], "dq": [], "tau": [], "online": [],
+                       "index": index, "names": [self.joint_names[i] for i in index],
+                       "groups": groups,
                        "created": datetime.datetime.now().isoformat(timespec="seconds")}
         self._set_teach_damping()
         self.record_timer = self.create_timer(1.0 / self.record_rate, self._record_step)
         self._record_step()
         self.message = "recording"
-        return "recording at %.0f Hz" % self.record_rate
+        offline = sorted(set(self.buffer["names"]) & self.offline)
+        warn = " (WARNING offline: %s)" % ", ".join(offline) if offline else ""
+        return "recording %s at %.0f Hz%s" % ("+".join(groups), self.record_rate, warn)
 
     def record_stop(self):
         if self.state != RECORDING:
@@ -328,10 +354,13 @@ class MotionRecorder(Node):
             self.get_logger().error(self.message)
             return
         b = self.buffer
+        i = b["index"]
         b["t"].append(time.monotonic() - b["t0"])
-        b["q"].append(self.q.copy())
-        b["dq"].append(self.dq.copy())
-        b["tau"].append(self.tau.copy())
+        b["q"].append(self.q[i].copy())
+        b["dq"].append(self.dq[i].copy())
+        b["tau"].append(self.tau[i].copy())
+        # Saved as-is; playback refuses joints that were offline in the take.
+        b["online"].append([n not in self.offline for n in b["names"]])
 
     def _finish_recording(self, save):
         if self.record_timer is not None:
@@ -346,7 +375,8 @@ class MotionRecorder(Node):
             raise RuntimeError("recording too short")
         name = self._p("recording_name") or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         rec = storage.make_recording(b["names"], self.record_rate, b["t"], b["q"], b["dq"],
-                                     b["tau"], b["created"])
+                                     b["tau"], b["created"], online=b["online"],
+                                     groups=b["groups"])
         path = storage.save_recording(self.recordings_dir, name, rec)
         self.last_saved = path
         self._listing_time = 0.0  # refresh the dropdown now
@@ -392,13 +422,20 @@ class MotionRecorder(Node):
         if self.joint_names is None or not self._data_fresh():
             raise RuntimeError("no fresh /joint_states")
         rec = storage.load_recording(os.path.join(self.recordings_dir, name))
-        validate_recording(rec, self.joint_names, float(self._p("max_recorded_vel")))
-        groups = self._p("play_groups")
-        mask = np.array([any(self.groups[g].fullmatch(n) for g in groups) for n in self.joint_names])
-        if not mask.any():
-            raise RuntimeError("play_groups select no joints")
+        # Played joints = selected groups that are in the take; others hold.
+        mask = self._group_mask(self._p("play_groups"))
+        mask &= np.array([n in rec["joint_names"] for n in self.joint_names])
+        played = [n for n, m in zip(self.joint_names, mask) if m]
+        if not played:
+            raise RuntimeError("the selected groups are not in this recording")
+        offline_now = sorted(set(played) & self.offline)
+        if offline_now:
+            raise RuntimeError("motors offline now: " + ", ".join(offline_now))
+        validate_recording(rec, played, float(self._p("max_recorded_vel")))
+        rec_q = np.zeros((len(rec["t"]), len(self.joint_names)))
+        rec_q[:, mask] = reorder(rec, played)
         self.rec = rec
-        self.rec_q = reorder(rec, self.joint_names)
+        self.rec_q = rec_q  # only the masked columns are used
         self.rec_t = np.asarray(rec["t"], float) - float(rec["t"][0])
         self.selected_mask = mask
 
@@ -464,6 +501,9 @@ class MotionRecorder(Node):
             "joints": len(self.joint_names or []),
             "groups": list(self.groups),
             "play_groups": list(self._p("play_groups")),
+            "record_groups": list(self._p("record_groups")),
+            "offline_joints": sorted(self.offline),
+            "offline_groups": self._offline_groups(),
             "selected_recording": self._p("selected_recording"),
             "recording_name": self._p("recording_name"),
             "teach_damping_kd": float(self._p("teach_damping_kd")),

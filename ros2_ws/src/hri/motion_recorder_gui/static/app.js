@@ -136,9 +136,13 @@
     document.getElementById("data-fresh").textContent = rec.online ? (rec.data_fresh ? "fresh" : "STALE") : "—";
     document.getElementById("joints").textContent = rec.online ? rec.joints : "—";
     document.getElementById("last-take").textContent = rec.last_saved || "—";
+    const offline = bridge.online ? (bridge.offline_joints || []) : [];
+    document.getElementById("offline").textContent =
+      !bridge.online ? "—" : offline.length ? offline.map((n) => n.replace(/_joint$/, "")).join(", ") : "none";
 
     renderRecordings(rec);
-    renderGroups(rec);
+    renderGroupBoxes("record-groups", rec, rec.record_groups, null);
+    renderGroupBoxes("groups", rec, rec.play_groups, selectedTakeGroups(rec));
     renderButtons(rec, bridge);
   }
 
@@ -159,20 +163,44 @@
     select.value = rec.selected_recording || "";
   }
 
-  function renderGroups(rec) {
-    const container = document.getElementById("groups");
+  // Groups contained in the selected recording (null: unknown / all).
+  function selectedTakeGroups(rec) {
+    const name = document.getElementById("recording").value;
+    const take = (rec.recordings || []).find((r) => r.name === name);
+    if (!take) return null;
+    return take.groups || rec.groups || [];
+  }
+
+  // Checkboxes per joint group. `available` (or null for all) limits which can
+  // be ticked; offline groups get a tag. Rebuilt only when inputs change, and
+  // user ticks are kept across status updates.
+  function renderGroupBoxes(id, rec, defaults, available) {
+    const container = document.getElementById(id);
     const groups = rec.groups || [];
-    if (container.dataset.groups === groups.join(",")) return;
-    container.dataset.groups = groups.join(",");
+    const offline = rec.offline_groups || [];
+    const key = JSON.stringify([groups, offline, available]);
+    if (container.dataset.key === key) return;
+    const previous = container.dataset.key
+      ? Array.from(container.querySelectorAll("input:checked")).map((b) => b.value) : (defaults || groups);
+    container.dataset.key = key;
     container.innerHTML = "";
     for (const g of groups) {
       const label = document.createElement("label");
       const box = document.createElement("input");
       box.type = "checkbox";
       box.value = g;
-      box.checked = (rec.play_groups || groups).includes(g);
+      const usable = !available || available.includes(g);
+      box.disabled = !usable;
+      box.checked = usable && previous.includes(g);
+      label.classList.toggle("unavailable", !usable);
       label.appendChild(box);
       label.appendChild(document.createTextNode(` ${g.replace("_", " ")}`));
+      if (offline.includes(g)) {
+        const tag = document.createElement("span");
+        tag.className = "tag";
+        tag.textContent = "offline";
+        label.appendChild(tag);
+      }
       container.appendChild(label);
     }
   }
@@ -202,8 +230,8 @@
 
   // ------------------------------------------------------------------ actions
 
-  function selectedGroups() {
-    return Array.from(document.querySelectorAll("#groups input:checked")).map((b) => b.value);
+  function selectedGroups(id) {
+    return Array.from(document.querySelectorAll(`#${id || "groups"} input:checked`)).map((b) => b.value);
   }
 
   document.getElementById("estop").addEventListener("click", estop);
@@ -213,9 +241,15 @@
     if (s === "RECORDING") {
       run("record_stop", null, "Stop recording");
     } else {
+      const groups = selectedGroups("record-groups");
+      if (!groups.length) {
+        setStatus("select at least one limb to record");
+        return;
+      }
       run("record_start", {
         name: document.getElementById("rec-name").value.trim(),
         teach_damping_kd: parseFloat(document.getElementById("teach-kd").value) || 0,
+        groups,
       }, "Record");
     }
   });
