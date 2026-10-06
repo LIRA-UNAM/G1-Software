@@ -136,6 +136,8 @@
     document.getElementById("data-fresh").textContent = rec.online ? (rec.data_fresh ? "fresh" : "STALE") : "—";
     document.getElementById("joints").textContent = rec.online ? rec.joints : "—";
     document.getElementById("last-take").textContent = rec.last_saved || "—";
+    document.getElementById("home").textContent = !rec.online ? "—"
+      : rec.home ? `set ${rec.home.created.replace("T", " ")} (${rec.home.joints} joints)` : "not set";
     const offline = bridge.online ? (bridge.offline_joints || []) : [];
     document.getElementById("offline").textContent =
       !bridge.online ? "—" : offline.length ? offline.map((n) => n.replace(/_joint$/, "")).join(", ") : "none";
@@ -221,7 +223,8 @@
     pause.disabled = !(s === "PLAYING" || s === "PAUSED");
     document.getElementById("reset").disabled = !rec.online || s === "RECORDING";
     document.getElementById("release").disabled =
-      !["APPROACHING", "PLAYING", "PAUSED", "RETURNING", "HOLDING"].includes(s);
+      !["GOING_HOME", "APPROACHING", "PLAYING", "PAUSED", "RETURNING", "HOLDING"].includes(s);
+    document.getElementById("set-home").disabled = !(s === "IDLE" || s === "HOLDING" || s === "ESTOP");
     document.getElementById("recording").disabled = !(s === "IDLE" || s === "HOLDING" || s === "ESTOP");
     const toggle = document.getElementById("motor-toggle");
     toggle.textContent = bridge.enable_lowcmd ? "Disable motor output" : "Enable motor output";
@@ -287,7 +290,7 @@
   document.getElementById("reset").addEventListener("click", async () => {
     const file = document.getElementById("recording").value;
     const text = file
-      ? `Reset: clear the e-stop and move slowly to the start pose of ${file}?`
+      ? `Reset: clear the e-stop and move slowly ${state.status.recorder.home ? "home" : `to the start pose of ${file}`}?`
       : "Reset: clear the e-stop? (no recording selected, the robot stays in damping)";
     if (await confirmModal(text)) {
       const groups = selectedGroups();
@@ -296,6 +299,13 @@
   });
 
   document.getElementById("release").addEventListener("click", () => run("release", null, "Release"));
+
+  document.getElementById("set-home").addEventListener("click", async () => {
+    const text = state.status.recorder.home
+      ? "Replace the home keyframe with the current joint positions?"
+      : "Set the home keyframe to the current joint positions?";
+    if (await confirmModal(text)) run("set_home", null, "Set home");
+  });
 
   document.getElementById("motor-toggle").addEventListener("click", async () => {
     const enabled = state.status && state.status.bridge && state.status.bridge.enable_lowcmd;

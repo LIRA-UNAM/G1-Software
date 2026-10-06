@@ -33,6 +33,7 @@
     <div><span>Joint data</span><b id="data-fresh">&mdash;</b></div>
     <div><span>Joints</span><b id="joints">&mdash;</b></div>
     <div><span>Last take</span><b id="last-take" class="path">&mdash;</b></div>
+    <div><span>Home keyframe</span><b id="home" class="path">&mdash;</b></div>
     <div class="wide"><span>Offline motors</span><b id="offline" class="path">&mdash;</b></div>
   </div>
   <div class="controls">
@@ -82,8 +83,9 @@
       <button id="pause" class="secondary">Stop</button>
       <button id="reset" class="warn">Reset</button>
       <button id="release" class="secondary">Release</button>
+      <button id="set-home" class="secondary" title="Store the current joint positions as the home keyframe">&#8962; Set home</button>
     </div>
-    <p class="hint">Only groups contained in the selected recording can be played. Play moves slowly to the recording's start pose, replays it at the recorded rate, then returns slowly to the start pose and holds. Unselected groups hold their position. Reset clears the e-stop and returns to the start pose. Release lets the bridge damp the joints.</p>
+    <p class="hint">Only groups contained in the selected recording can be played. With a home keyframe set, Play moves slowly home &rarr; to the recording's start pose, replays it at the recorded rate, then returns slowly home and holds (without home: start pose &rarr; play &rarr; start pose). Set home stores the current joint positions (online motors only); position the robot first, e.g. by hand in teach mode. Unselected groups hold their position. Reset clears the e-stop and returns home (or to the start pose). Release lets the bridge damp the joints.</p>
   </section>
 </main>
 

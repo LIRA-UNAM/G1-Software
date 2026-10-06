@@ -388,6 +388,7 @@ td.col-bridge {
   --state: var(--red);
 }
 
+.state-going_home,
 .state-approaching,
 .state-returning,
 .state-paused {

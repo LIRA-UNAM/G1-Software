@@ -34,6 +34,7 @@ from .trajectory import (interp_frames, reorder, safe_move_duration, smooth_inte
 
 IDLE = "IDLE"
 RECORDING = "RECORDING"
+GOING_HOME = "GOING_HOME"
 APPROACHING = "APPROACHING"
 PLAYING = "PLAYING"
 PAUSED = "PAUSED"
@@ -41,7 +42,11 @@ RETURNING = "RETURNING"
 HOLDING = "HOLDING"
 ESTOP = "ESTOP"
 # States in which this node owns the joints and streams targets.
-COMMANDING = (APPROACHING, PLAYING, PAUSED, RETURNING, HOLDING)
+COMMANDING = (GOING_HOME, APPROACHING, PLAYING, PAUSED, RETURNING, HOLDING)
+# Safe (speed-limited) moves between keyframes.
+SEGMENT_STATES = (GOING_HOME, APPROACHING, RETURNING)
+# Skip the move to home when every played joint is already this close (rad).
+AT_HOME_TOLERANCE = 0.02
 
 DEFAULT_GROUPS = [
     "legs:.*_(hip|knee|ankle)_.*",
@@ -98,6 +103,8 @@ class MotionRecorder(Node):
         self.saved_damping_kd = None
         self.recordings = []
         self._listing_time = 0.0
+        self.home = storage.load_home(self.recordings_dir)  # persisted home keyframe
+        self.pending = []  # queued (q_to, state) safe moves
         self.offline = set()  # joints the bridge reports offline (no voltage / fault)
         self.bridge_status_time = None
 
@@ -119,7 +126,8 @@ class MotionRecorder(Node):
                               ("record_stop", self.record_stop),
                               ("discard", self.discard), ("play", self.play),
                               ("pause", self.pause), ("resume", self.resume),
-                              ("reset", self.reset), ("release", self.release)):
+                              ("reset", self.reset), ("release", self.release),
+                              ("set_home", self.set_home)):
             self.create_service(Trigger, "~/" + name, self._wrap(handler))
 
         self.add_on_set_parameters_callback(self._on_set_parameters)
@@ -212,6 +220,7 @@ class MotionRecorder(Node):
         self.state = ESTOP
         self.message = "e-stop latched: press Reset"
         self.segment = None
+        self.pending = []
 
     def _trigger_estop(self, reason):
         self.get_logger().error("Triggering e-stop: " + reason)
@@ -281,14 +290,37 @@ class MotionRecorder(Node):
         self.message = "deleted " + name
         return self.message
 
+    def set_home(self):
+        """Home keyframe = current measured joint positions (online motors only)."""
+        if self.state not in (IDLE, HOLDING, ESTOP):
+            raise RuntimeError("cannot set home while %s" % self.state)
+        if self.joint_names is None or not self._data_fresh():
+            raise RuntimeError("no fresh /joint_states")
+        online = [n not in self.offline for n in self.joint_names]
+        self.home = storage.save_home(
+            self.recordings_dir, self.joint_names, self.q, online,
+            datetime.datetime.now().isoformat(timespec="seconds"))
+        skipped = [n for n, ok in zip(self.joint_names, online) if not ok]
+        self.message = "home set (%d joints)%s" % (
+            len(self.home["joints"]), "; offline, not stored: " + ", ".join(skipped) if skipped else "")
+        self.get_logger().info(self.message)
+        return self.message
+
     def play(self):
         if self.state not in (IDLE, HOLDING):
             raise RuntimeError("cannot play while %s" % self.state)
         self._load_selected()
         start = self._start_pose()
-        self._begin_segment(start, APPROACHING)
+        home = self._home_pose(start)
         self.play_clock = 0.0
         self.play_last = None
+        # home -> start of the take -> play -> home (or start -> play -> start).
+        if home is not None and not self._near(home):
+            self._begin_segment(home, GOING_HOME)
+            self.pending = [(start, APPROACHING)]
+            return "moving to home, then to the start pose"
+        self.pending = []
+        self._begin_segment(start, APPROACHING)
         return "moving to start pose (%.1f s)" % self.segment[3]
 
     def pause(self):
@@ -323,22 +355,27 @@ class MotionRecorder(Node):
             return
         self.state = IDLE
         self.segment = None
+        self.pending = []
         if not self._p("selected_recording"):
             self.message = "e-stop cleared (no recording selected)"
             return
         try:
             self._load_selected()
             self.target = None  # start from the measured (damped) pose
-            self._begin_segment(self._start_pose(), RETURNING)
-            self.message = "e-stop cleared: returning to start pose"
+            start = self._start_pose()
+            home = self._home_pose(start)
+            self._begin_segment(home if home is not None else start, RETURNING)
+            self.message = "e-stop cleared: returning to %s" % (
+                "home" if home is not None else "start pose")
         except (RuntimeError, ValueError, OSError) as exc:
-            self.message = "e-stop cleared; cannot return to start: %s" % exc
+            self.message = "e-stop cleared; cannot return: %s" % exc
 
     def release(self):
         if self.state not in COMMANDING:
             raise RuntimeError("nothing to release")
         self.state = IDLE
         self.segment = None
+        self.pending = []
         self.target = None
         self.message = "released (bridge damping)"
         return self.message
@@ -444,14 +481,27 @@ class MotionRecorder(Node):
         base = self.target if self.target is not None else self.q
         return np.where(self.selected_mask, self.rec_q[0], base)
 
+    def _home_pose(self, start):
+        """Target with played joints at home (start pose where home has no value), or None."""
+        if not self.home:
+            return None
+        joints = self.home["joints"]
+        home = np.array([joints.get(n, np.nan) for n in self.joint_names])
+        return np.where(self.selected_mask & ~np.isnan(home), home, start)
+
+    def _near(self, pose):
+        current = self.target if self.target is not None else self.q
+        return float(np.max(np.abs((pose - current)[self.selected_mask]))) < AT_HOME_TOLERANCE
+
     def _begin_segment(self, q_to, state):
         q_from = self.target if self.target is not None else self.q.copy()
         duration = safe_move_duration(q_from, q_to, float(self._p("approach_max_vel")),
                                       float(self._p("approach_min_duration_s")))
         self.segment = (q_from, q_to, time.monotonic(), duration)
         self.state = state
-        self.message = "%s (%.1f s)" % ("moving to start pose" if state == APPROACHING
-                                        else "returning to start pose", duration)
+        what = {GOING_HOME: "moving to home", APPROACHING: "moving to start pose",
+                RETURNING: "returning to home" if self.home else "returning to start pose"}[state]
+        self.message = "%s (%.1f s)" % (what, duration)
 
     def _command_step(self):
         if self.state not in COMMANDING:
@@ -460,26 +510,30 @@ class MotionRecorder(Node):
             self._trigger_estop("/joint_states timed out during %s" % self.state)
             return
         now = time.monotonic()
-        if self.state in (APPROACHING, RETURNING):
+        if self.state in SEGMENT_STATES:
             q_from, q_to, t0, duration = self.segment
             s = (now - t0) / duration
             self.target = smooth_interp(q_from, q_to, s)
             if s >= 1.0:
-                if self.state == APPROACHING:
+                if self.pending:
+                    self._begin_segment(*self.pending.pop(0))
+                elif self.state == APPROACHING:
                     self.state = PLAYING
                     self.play_last = now
                     self.message = "playing"
                 else:
                     self.state = HOLDING
                     self.segment = None
-                    self.message = "holding start pose"
+                    self.message = "holding home" if self.home else "holding start pose"
         elif self.state == PLAYING:
             self.play_clock += now - self.play_last
             self.play_last = now
             frame = interp_frames(self.rec_t, self.rec_q, self.play_clock)
             self.target = np.where(self.selected_mask, frame, self.target)
             if self.play_clock >= self.rec_t[-1]:
-                self._begin_segment(self._start_pose(), RETURNING)
+                start = self._start_pose()
+                home = self._home_pose(start)
+                self._begin_segment(home if home is not None else start, RETURNING)
         # PAUSED / HOLDING keep publishing the last target.
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -509,6 +563,8 @@ class MotionRecorder(Node):
             "teach_damping_kd": float(self._p("teach_damping_kd")),
             "last_saved": os.path.basename(self.last_saved) if self.last_saved else "",
             "recordings": self.recordings,
+            "home": ({"created": self.home.get("created", ""), "joints": len(self.home["joints"])}
+                     if self.home else None),
         }
         if self.state == RECORDING and self.buffer is not None:
             status["recording"] = {"frames": len(self.buffer["t"]),

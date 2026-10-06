@@ -74,3 +74,16 @@ def test_v1_files_still_load(tmp_path):
     rec = storage.load_recording(str(path))
     assert rec["groups"] is None and rec["online"].shape == (4, 3)
     assert not rec["online"][:, 0].any() and rec["online"][:, 1:].all()
+
+
+def test_home_keyframe_round_trip(tmp_path):
+    assert storage.load_home(str(tmp_path)) is None
+    home = storage.save_home(str(tmp_path), ["a", "b", "c"], [0.1, 0.2, 0.0],
+                             [True, True, False], "2026-10-07T09:00:00")
+    assert home["joints"] == {"a": 0.1, "b": 0.2}  # offline joint c not stored
+    loaded = storage.load_home(str(tmp_path))
+    assert loaded == home
+    # The home file is never listed as a recording.
+    assert storage.RecordingIndex(str(tmp_path)).list() == []
+    (tmp_path / storage.HOME_FILE).write_text("{broken")
+    assert storage.load_home(str(tmp_path)) is None

@@ -1,5 +1,6 @@
 """Saving / loading recordings as .pkl files."""
 
+import json
 import os
 import pickle
 import re
@@ -79,6 +80,33 @@ def make_recording(joint_names, rate_hz, t, q, dq, tau, created, online=None, gr
         "tau_est": np.asarray(tau, float),
         "start_q": q[0].copy() if len(q) else q,
     }
+
+
+HOME_FILE = "home_keyframe.json"  # not .pkl: never listed as a recording
+
+
+def save_home(directory, joint_names, q, online, created):
+    """Stores the home keyframe (only joints whose motor was online)."""
+    os.makedirs(directory, exist_ok=True)
+    home = {"created": created,
+            "joints": {n: float(v) for n, v, ok in zip(joint_names, q, online) if ok}}
+    fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+    with os.fdopen(fd, "w") as f:
+        json.dump(home, f, indent=1)
+    os.replace(tmp, os.path.join(directory, HOME_FILE))
+    return home
+
+
+def load_home(directory):
+    """The home keyframe dict ({"created", "joints": {name: q}}) or None."""
+    try:
+        with open(os.path.join(directory, HOME_FILE)) as f:
+            home = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(home, dict) or not isinstance(home.get("joints"), dict):
+        return None
+    return home
 
 
 class RecordingIndex:

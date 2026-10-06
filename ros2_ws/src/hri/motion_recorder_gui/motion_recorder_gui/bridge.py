@@ -12,7 +12,7 @@ SERVICE_WAIT_SEC = 1.0
 SERVICE_TIMEOUT_SEC = 5.0
 STATUS_STALE_SEC = 0.5
 RECORDER_ACTIONS = ("record_start", "record_stop", "discard", "play", "pause", "resume",
-                    "reset", "release")
+                    "reset", "release", "set_home")
 
 
 class MotionRecorderGuiBridge(Node):
@@ -102,7 +102,7 @@ class MotionRecorderGuiBridge(Node):
                 params["play_groups"] = ("string_array", command["groups"])
             self._set("recorder", params)
             return self._trigger(action)
-        if action in ("record_stop", "discard", "pause", "resume", "release"):
+        if action in ("record_stop", "discard", "pause", "resume", "release", "set_home"):
             return self._trigger(action)
         if action == "select":
             self._set("recorder", {"selected_recording": ("string", command.get("file") or "")})
