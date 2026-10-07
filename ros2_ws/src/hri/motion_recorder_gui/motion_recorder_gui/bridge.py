@@ -4,8 +4,7 @@ import time
 from rcl_interfaces.srv import SetParametersAtomically
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from rclpy.qos import QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Bool, Empty, String
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 SERVICE_WAIT_SEC = 1.0
@@ -24,8 +23,6 @@ class MotionRecorderGuiBridge(Node):
         self.declare_parameter("port", 8083)
         self.declare_parameter("recorder_node", "/motion_recorder")
         self.declare_parameter("bridge_node", "/g1_lowlevel_bridge")
-        self.declare_parameter("estop_topic", "/getup/estop")
-        self.declare_parameter("heartbeat_topic", "/getup/heartbeat")
 
         self.host = self.get_parameter("host").value
         self.port = self.get_parameter("port").value
@@ -35,19 +32,12 @@ class MotionRecorderGuiBridge(Node):
 
         self._triggers = {a: self.create_client(Trigger, "%s/%s" % (recorder, a))
                           for a in RECORDER_ACTIONS}
-        self._bridge_estop = self.create_client(Trigger, bridge + "/estop")
         self._set_clients = {
             "recorder": self.create_client(SetParametersAtomically,
                                            recorder + "/set_parameters_atomically"),
             "bridge": self.create_client(SetParametersAtomically,
                                          bridge + "/set_parameters_atomically"),
         }
-
-        reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
-        self._estop_pub = self.create_publisher(
-            Bool, self.get_parameter("estop_topic").value, reliable)
-        self._heartbeat_pub = self.create_publisher(
-            Empty, self.get_parameter("heartbeat_topic").value, reliable)
 
         self._status = {"recorder": (None, 0.0), "bridge": (None, 0.0)}
         self.create_subscription(String, recorder + "/status",
@@ -57,15 +47,6 @@ class MotionRecorderGuiBridge(Node):
 
     def config(self):
         return {"recorder_node": self._names["recorder"], "bridge_node": self._names["bridge"]}
-
-    # -- fast paths (asyncio thread) -------------------------------------------
-
-    def heartbeat(self):
-        self._heartbeat_pub.publish(Empty())
-
-    def publish_estop(self):
-        # The recorder and the bridge both latch on this topic.
-        self._estop_pub.publish(Bool(data=True))
 
     def status_snapshot(self):
         now = time.monotonic()
@@ -85,8 +66,6 @@ class MotionRecorderGuiBridge(Node):
 
     def execute_command(self, command):
         action = command.get("action")
-        if action == "estop_services":
-            return self._estop_services()
         if action == "record_start":
             params = {
                 "recording_name": ("string", command.get("name") or ""),
@@ -144,13 +123,3 @@ class MotionRecorderGuiBridge(Node):
         result = self._wait_and_call(self._set_clients[node], request).result
         if not result.successful:
             raise RuntimeError(result.reason)
-
-    def _estop_services(self):
-        ok = False
-        if self._bridge_estop.service_is_ready():
-            future = self._bridge_estop.call_async(Trigger.Request())
-            deadline = time.monotonic() + SERVICE_TIMEOUT_SEC
-            while not future.done() and time.monotonic() < deadline:
-                time.sleep(0.002)
-            ok = bool(future.done() and future.result() is not None and future.result().success)
-        return {"ok": ok, "results": {"bridge_estop": ok}}

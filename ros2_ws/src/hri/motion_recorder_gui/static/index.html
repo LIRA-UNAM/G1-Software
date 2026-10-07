@@ -8,7 +8,7 @@
 </head>
 <body>
 <div id="conn-lost" class="conn-lost" hidden>
-  CONNECTION LOST &mdash; the dead-man will e-stop the robot if motor output is enabled. Reconnecting&hellip;
+  CONNECTION LOST &mdash; reconnecting&hellip; The robot keeps running: use the remote (L2+B) to stop it if needed.
 </div>
 
 <header class="topbar">
@@ -16,7 +16,6 @@
     <h1>G1 Motion Recorder</h1>
     <span id="status" class="status">connecting&hellip;</span>
   </div>
-  <button id="estop" class="estop" title="Emergency stop (Space / Esc)">E-STOP</button>
 </header>
 
 <section id="state" class="state state-offline">
@@ -29,7 +28,6 @@
   <div class="state-grid">
     <div><span>Bridge</span><b id="bridge-state">offline</b></div>
     <div><span>Motor output</span><b id="motor-output">&mdash;</b></div>
-    <div><span>Dead-man</span><b id="deadman">&mdash;</b></div>
     <div><span>Joint data</span><b id="data-fresh">&mdash;</b></div>
     <div><span>Joints</span><b id="joints">&mdash;</b></div>
     <div><span>Last take</span><b id="last-take" class="path">&mdash;</b></div>
@@ -39,7 +37,6 @@
   <div class="controls">
     <button id="motor-toggle" class="warn">Enable motor output</button>
   </div>
-  <p class="hint">Space or Esc triggers the e-stop from anywhere on this page (Space is ignored while typing in a text field).</p>
 </section>
 
 <main class="columns">
@@ -85,7 +82,7 @@
       <button id="release" class="secondary">Release</button>
       <button id="set-home" class="secondary" title="Store the current joint positions as the home keyframe">&#8962; Set home</button>
     </div>
-    <p class="hint">Only groups contained in the selected recording can be played. With a home keyframe set, Play moves slowly home &rarr; to the recording's start pose, replays it at the recorded rate, then returns slowly home and holds (without home: start pose &rarr; play &rarr; start pose). Set home stores the current joint positions (online motors only); position the robot first, e.g. by hand in teach mode. Unselected groups hold their position. Reset clears the e-stop and returns home (or to the start pose). Release lets the bridge damp the joints.</p>
+    <p class="hint">Only groups contained in the selected recording can be played. With a home keyframe set, Play moves slowly home &rarr; to the recording's start pose, replays it at the recorded rate, then returns slowly home and holds (without home: start pose &rarr; play &rarr; start pose). Set home stores the current joint positions (online motors only); position the robot first, e.g. by hand in teach mode. Unselected groups hold their position. Reset stops what is running and returns slowly home (or to the start pose). Release lets the bridge damp the joints.</p>
   </section>
 </main>
 

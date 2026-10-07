@@ -80,26 +80,6 @@ button.warn {
   color: white;
 }
 
-.estop {
-  flex-shrink: 0;
-  min-width: 11rem;
-  min-height: 4.5rem;
-  font-size: 1.6rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  color: white;
-  background: var(--red);
-  border: 4px solid #7f1d1d;
-  border-radius: 0.75rem;
-  box-shadow: 0 4px 0 #7f1d1d;
-}
-
-.estop:active,
-.estop.pressed {
-  transform: translateY(3px);
-  box-shadow: 0 1px 0 #7f1d1d;
-}
-
 .conn-lost {
   position: sticky;
   top: 0;
@@ -130,11 +110,6 @@ button.warn {
 
 .state-tracking {
   --state: var(--green);
-}
-
-.state-estop {
-  --state: var(--red);
-  animation: blink 1s step-start infinite;
 }
 
 @keyframes blink {
@@ -213,11 +188,6 @@ button.warn {
 
   .columns {
     grid-template-columns: 1fr;
-  }
-
-  .estop {
-    min-width: 8rem;
-    font-size: 1.3rem;
   }
 }
 

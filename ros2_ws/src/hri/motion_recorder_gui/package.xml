@@ -3,7 +3,7 @@
 <package format="3">
   <name>motion_recorder_gui</name>
   <version>0.0.0</version>
-  <description>Web dashboard for motion_recorder: record / discard takes, choose a recording, play / pause / resume / reset, and an emergency stop with dead-man heartbeat.</description>
+  <description>Web dashboard for motion_recorder: record / discard takes, choose a recording, play / pause / resume, set the home keyframe and return home.</description>
   <maintainer email="garcia.miguel.onate@gmail.com">Miguel Garcia</maintainer>
   <license>MIT</license>
 

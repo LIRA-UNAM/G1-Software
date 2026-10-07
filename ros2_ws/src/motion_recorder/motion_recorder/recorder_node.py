@@ -7,7 +7,7 @@ samples /joint_states at `record_rate_hz` and saves the take as a .pkl file.
 Playback: safe cosine move to the recording's first frame, real-time replay of
 the selected joint groups (others hold), then a safe move back to the first
 frame and hold. Targets are published on the bridge's command topic, so the
-bridge keeps owning gains, joint limits, the e-stop latch and the dead-man.
+bridge keeps owning gains, joint limits and the damping fallback.
 """
 
 import datetime
@@ -23,9 +23,9 @@ from rcl_interfaces.srv import GetParameters, SetParameters
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool, String
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from . import storage
@@ -40,7 +40,6 @@ PLAYING = "PLAYING"
 PAUSED = "PAUSED"
 RETURNING = "RETURNING"
 HOLDING = "HOLDING"
-ESTOP = "ESTOP"
 # States in which this node owns the joints and streams targets.
 COMMANDING = (GOING_HOME, APPROACHING, PLAYING, PAUSED, RETURNING, HOLDING)
 # Safe (speed-limited) moves between keyframes.
@@ -64,12 +63,11 @@ class MotionRecorder(Node):
         self.declare_parameter("command_rate_hz", 100.0)
         self.declare_parameter("joint_states_topic", "/joint_states")
         self.declare_parameter("command_topic", "/getup/joint_command")
-        self.declare_parameter("estop_topic", "/getup/estop")
         self.declare_parameter("bridge_node", "/g1_lowlevel_bridge")
         self.declare_parameter("approach_max_vel", 0.3)
         self.declare_parameter("approach_min_duration_s", 2.0)
         self.declare_parameter("max_recorded_vel", 4.0)
-        self.declare_parameter("data_timeout_s", 0.2)
+        self.declare_parameter("data_timeout_s", 10.0)
         self.declare_parameter("joint_groups", DEFAULT_GROUPS)
         # Live-editable arguments of the services (set by the GUI).
         self.declare_parameter("teach_damping_kd", 0.3)
@@ -108,11 +106,8 @@ class MotionRecorder(Node):
         self.offline = set()  # joints the bridge reports offline (no voltage / fault)
         self.bridge_status_time = None
 
-        reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(JointState, p("joint_states_topic"), self._on_joint_state,
                                  qos_profile_sensor_data)
-        self.create_subscription(Bool, p("estop_topic"), self._on_estop, reliable)
-        self.estop_pub = self.create_publisher(Bool, p("estop_topic"), reliable)
         self.command_pub = self.create_publisher(JointState, p("command_topic"), 10)
         self.status_pub = self.create_publisher(String, "~/status", 10)
 
@@ -120,7 +115,6 @@ class MotionRecorder(Node):
         self.create_subscription(String, bridge + "/status", self._on_bridge_status, 10)
         self.bridge_get = self.create_client(GetParameters, bridge + "/get_parameters")
         self.bridge_set = self.create_client(SetParameters, bridge + "/set_parameters")
-        self.bridge_reset = self.create_client(Trigger, bridge + "/reset_estop")
 
         for name, handler in (("record_start", self.record_start),
                               ("record_stop", self.record_stop),
@@ -171,7 +165,7 @@ class MotionRecorder(Node):
                         successful=False,
                         reason="%s must be a non-empty subset of %s" % (prm.name, list(self.groups)))
             if prm.name in ("recordings_dir", "record_rate_hz", "command_rate_hz", "joint_groups",
-                            "joint_states_topic", "command_topic", "estop_topic", "bridge_node"):
+                            "joint_states_topic", "command_topic", "bridge_node"):
                 return SetParametersResult(successful=False, reason=prm.name + " is read-only")
         return SetParametersResult(successful=True)
 
@@ -185,7 +179,7 @@ class MotionRecorder(Node):
             return
         if self.joint_names != list(msg.name):
             if self.state in COMMANDING or self.state == RECORDING:
-                self._trigger_estop("joint_states names changed")
+                self._stop("joint_states names changed")
             self.joint_names = list(msg.name)
         self.q = np.asarray(msg.position, float)
         n = len(msg.name)
@@ -211,22 +205,17 @@ class MotionRecorder(Node):
     def _data_fresh(self):
         return self.last_js is not None and time.monotonic() - self.last_js < self._p("data_timeout_s")
 
-    def _on_estop(self, msg):
-        if not msg.data or self.state == ESTOP:
-            return
+    def _stop(self, reason):
+        """Stops recording/commanding; with no commands the bridge damps the joints."""
         if self.state == RECORDING:
             self._finish_recording(save=False)
-        self.get_logger().error("E-STOP received: stopping (%s)" % self.state)
-        self.state = ESTOP
-        self.message = "e-stop latched: press Reset"
+        if self.state in COMMANDING:
+            self.get_logger().error("Stopping %s: %s" % (self.state, reason))
+        self.state = IDLE
         self.segment = None
         self.pending = []
-
-    def _trigger_estop(self, reason):
-        self.get_logger().error("Triggering e-stop: " + reason)
-        self.estop_pub.publish(Bool(data=True))
-        self._on_estop(Bool(data=True))
-        self.message = "e-stop: " + reason
+        self.target = None
+        self.message = "stopped: " + reason
 
     # -------------------------------------------------------------- services
 
@@ -292,7 +281,7 @@ class MotionRecorder(Node):
 
     def set_home(self):
         """Home keyframe = current measured joint positions (online motors only)."""
-        if self.state not in (IDLE, HOLDING, ESTOP):
+        if self.state not in (IDLE, HOLDING):
             raise RuntimeError("cannot set home while %s" % self.state)
         if self.joint_names is None or not self._data_fresh():
             raise RuntimeError("no fresh /joint_states")
@@ -339,36 +328,24 @@ class MotionRecorder(Node):
         return "resumed"
 
     def reset(self):
+        """Stops what is running and moves slowly home (or to the take's start pose)."""
         if self.state == RECORDING:
             raise RuntimeError("stop the recording first")
-        if not self.bridge_reset.service_is_ready():
-            raise RuntimeError("bridge reset_estop service not available")
-        future = self.bridge_reset.call_async(Trigger.Request())
-        future.add_done_callback(self._after_bridge_reset)
-        self.message = "resetting e-stop"
-        return "reset requested"
-
-    def _after_bridge_reset(self, future):
-        result = future.result()
-        if result is None or not result.success:
-            self.message = "bridge e-stop reset failed"
-            return
-        self.state = IDLE
         self.segment = None
         self.pending = []
         if not self._p("selected_recording"):
-            self.message = "e-stop cleared (no recording selected)"
-            return
-        try:
-            self._load_selected()
-            self.target = None  # start from the measured (damped) pose
-            start = self._start_pose()
-            home = self._home_pose(start)
-            self._begin_segment(home if home is not None else start, RETURNING)
-            self.message = "e-stop cleared: returning to %s" % (
-                "home" if home is not None else "start pose")
-        except (RuntimeError, ValueError, OSError) as exc:
-            self.message = "e-stop cleared; cannot return: %s" % exc
+            if self.state in COMMANDING:
+                self.state = IDLE
+                self.target = None
+            self.message = "stopped (no recording selected)"
+            return self.message
+        if self.state not in COMMANDING:
+            self.target = None  # start from the measured pose
+        self._load_selected()
+        start = self._start_pose()
+        home = self._home_pose(start)
+        self._begin_segment(home if home is not None else start, RETURNING)
+        return self.message
 
     def release(self):
         if self.state not in COMMANDING:
@@ -507,7 +484,7 @@ class MotionRecorder(Node):
         if self.state not in COMMANDING:
             return
         if not self._data_fresh():
-            self._trigger_estop("/joint_states timed out during %s" % self.state)
+            self._stop("/joint_states timed out during %s" % self.state)
             return
         now = time.monotonic()
         if self.state in SEGMENT_STATES:

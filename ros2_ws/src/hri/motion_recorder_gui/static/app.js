@@ -21,18 +21,6 @@
     state.ws.onmessage = (event) => handleMessage(JSON.parse(event.data));
   }
 
-  function startHeartbeat() {
-    const send = () => {
-      if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send('{"action":"heartbeat"}');
-    };
-    try {
-      // Worker timers are not throttled in background tabs (see getup_gui).
-      new Worker("/static/heartbeat_worker.js").onmessage = send;
-    } catch (err) {
-      setInterval(send, 100);
-    }
-  }
-
   function setStatus(text) {
     document.getElementById("status").textContent = text;
   }
@@ -71,25 +59,7 @@
     }
   }
 
-  // ------------------------------------------------------------------- e-stop
-
-  async function estop() {
-    const button = document.getElementById("estop");
-    button.classList.add("pressed");
-    setTimeout(() => button.classList.remove("pressed"), 300);
-    await run("estop", null, "E-STOP");
-  }
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape" && event.key !== " ") return;
-    const el = document.activeElement;
-    const typing = el && el.tagName === "INPUT" && el.type === "text";
-    if (event.key === " " && typing) return;
-    event.preventDefault();
-    estop();
-  }, true);
-
-  // Never window.confirm(): it would pause the heartbeat and trip the dead-man.
+  // In-page dialog instead of window.confirm(), which would block the page.
   function confirmModal(text) {
     return new Promise((resolve) => {
       const modal = document.getElementById("modal");
@@ -115,12 +85,11 @@
     const rec = status.recorder || {};
     const bridge = status.bridge || {};
     const recState = rec.online ? rec.state : "offline";
-    const banner = bridge.online && bridge.estop ? "estop" : recState.toLowerCase();
+    const banner = recState.toLowerCase();
     document.getElementById("state").className = `state state-${banner}`;
     document.getElementById("rec-state").textContent = recState;
     let message = rec.online ? rec.message : "";
     if (rec.recording) message = `${rec.recording.frames} frames, ${fmt(rec.recording.duration_s)}`;
-    if (bridge.online && bridge.estop) message = `bridge e-stop: ${bridge.estop_reason}`;
     document.getElementById("rec-message").textContent = message;
 
     let progress = 0;
@@ -131,8 +100,6 @@
     document.getElementById("bridge-state").textContent = bridge.online ? bridge.state.toUpperCase() : "offline";
     document.getElementById("motor-output").textContent =
       bridge.online ? (bridge.enable_lowcmd ? "ENABLED" : "disabled") : "—";
-    document.getElementById("deadman").textContent = !bridge.online ? "—"
-      : bridge.heartbeat_timeout_s <= 0 ? "off" : bridge.deadman_armed ? "armed" : "waiting";
     document.getElementById("data-fresh").textContent = rec.online ? (rec.data_fresh ? "fresh" : "STALE") : "—";
     document.getElementById("joints").textContent = rec.online ? rec.joints : "—";
     document.getElementById("last-take").textContent = rec.last_saved || "—";
@@ -209,23 +176,22 @@
 
   function renderButtons(rec, bridge) {
     const s = rec.online ? rec.state : "offline";
-    const estopped = bridge.online && bridge.estop;
     const record = document.getElementById("record");
     record.textContent = s === "RECORDING" ? "■ Stop recording" : "● Record";
     record.classList.toggle("recording", s === "RECORDING");
-    record.disabled = !(s === "RECORDING" || ((s === "IDLE" || s === "HOLDING") && !estopped));
+    record.disabled = !(s === "RECORDING" || s === "IDLE" || s === "HOLDING");
     document.getElementById("discard").disabled =
-      !(s === "RECORDING" || ((s === "IDLE" || s === "ESTOP") && rec.last_saved));
+      !(s === "RECORDING" || (s === "IDLE" && rec.last_saved));
     document.getElementById("play").disabled =
-      !((s === "IDLE" || s === "HOLDING") && !estopped && document.getElementById("recording").value);
+      !((s === "IDLE" || s === "HOLDING") && document.getElementById("recording").value);
     const pause = document.getElementById("pause");
     pause.textContent = s === "PAUSED" ? "Resume" : "Stop";
     pause.disabled = !(s === "PLAYING" || s === "PAUSED");
     document.getElementById("reset").disabled = !rec.online || s === "RECORDING";
     document.getElementById("release").disabled =
       !["GOING_HOME", "APPROACHING", "PLAYING", "PAUSED", "RETURNING", "HOLDING"].includes(s);
-    document.getElementById("set-home").disabled = !(s === "IDLE" || s === "HOLDING" || s === "ESTOP");
-    document.getElementById("recording").disabled = !(s === "IDLE" || s === "HOLDING" || s === "ESTOP");
+    document.getElementById("set-home").disabled = !(s === "IDLE" || s === "HOLDING");
+    document.getElementById("recording").disabled = !(s === "IDLE" || s === "HOLDING");
     const toggle = document.getElementById("motor-toggle");
     toggle.textContent = bridge.enable_lowcmd ? "Disable motor output" : "Enable motor output";
     toggle.disabled = !bridge.online;
@@ -237,7 +203,6 @@
     return Array.from(document.querySelectorAll(`#${id || "groups"} input:checked`)).map((b) => b.value);
   }
 
-  document.getElementById("estop").addEventListener("click", estop);
 
   document.getElementById("record").addEventListener("click", () => {
     const s = state.status && state.status.recorder && state.status.recorder.state;
@@ -290,8 +255,8 @@
   document.getElementById("reset").addEventListener("click", async () => {
     const file = document.getElementById("recording").value;
     const text = file
-      ? `Reset: clear the e-stop and move slowly ${state.status.recorder.home ? "home" : `to the start pose of ${file}`}?`
-      : "Reset: clear the e-stop? (no recording selected, the robot stays in damping)";
+      ? `Reset: stop and move slowly ${state.status.recorder.home ? "home" : `to the start pose of ${file}`}?`
+      : "Reset: stop the current motion? (no recording selected: the joints are released to damping)";
     if (await confirmModal(text)) {
       const groups = selectedGroups();
       run("reset", { file, groups: groups.length ? groups : null }, "Reset");
@@ -319,6 +284,5 @@
     if (ok) run("set_enable_lowcmd", { enabled: true }, "Motor output");
   });
 
-  startHeartbeat();
   connect();
 })();

@@ -4,5 +4,3 @@ motion_recorder_gui_bridge:
     port: 8083
     recorder_node: /motion_recorder
     bridge_node: /g1_lowlevel_bridge
-    estop_topic: /getup/estop
-    heartbeat_topic: /getup/heartbeat

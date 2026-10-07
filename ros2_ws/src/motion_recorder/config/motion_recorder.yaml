@@ -7,7 +7,6 @@ motion_recorder:
     command_rate_hz: 100.0
     joint_states_topic: /joint_states
     command_topic: /getup/joint_command
-    estop_topic: /getup/estop
     bridge_node: /g1_lowlevel_bridge
     # Safe moves to/from the recording's start pose: cosine profile with peak
     # joint speed <= approach_max_vel, never shorter than approach_min_duration_s.
