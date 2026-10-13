@@ -32,6 +32,7 @@ target_include_directories(getup_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(getup_core PUBLIC onnxruntime::onnxruntime)
+set_target_properties(getup_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 ament_target_dependencies(getup_core PUBLIC unitree_hg)
 
 add_executable(getup_policy_node src/getup_policy_node.cpp)
@@ -45,6 +46,12 @@ ament_target_dependencies(g1_lowlevel_bridge rclcpp sensor_msgs std_msgs std_srv
 install(TARGETS getup_core
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib)
+# Export the policy helpers (OnnxPolicy, ObservationBuilder) and the bundled
+# ONNX Runtime so other policy packages (e.g. ppowalk) can reuse them.
+install(DIRECTORY include/ DESTINATION include)
+install(DIRECTORY "${ONNXRUNTIME_INCLUDE_DIR}/" DESTINATION include/onnxruntime)
+ament_export_include_directories(include include/onnxruntime)
+ament_export_libraries(getup_core onnxruntime)
 install(TARGETS getup_policy_node g1_lowlevel_bridge
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch models

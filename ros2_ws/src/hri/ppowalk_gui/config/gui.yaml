@@ -1,0 +1,6 @@
+ppowalk_gui_bridge:
+  ros__parameters:
+    host: 0.0.0.0
+    port: 8084
+    policy_node: /ppowalk_policy_node
+    bridge_node: /g1_lowlevel_bridge

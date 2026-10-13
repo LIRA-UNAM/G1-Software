@@ -1,0 +1,6 @@
+# Loaded after getup/config/g1_lowlevel_bridge.yaml: the shared bridge takes
+# its joint targets from the ppowalk policy node. (A second params file is used
+# because on Foxy node-specific YAML keys shadow launch/-p overrides.)
+g1_lowlevel_bridge:
+  ros__parameters:
+    command_topic: /ppowalk/joint_command
