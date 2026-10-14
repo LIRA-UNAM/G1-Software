@@ -11,6 +11,10 @@
 
   <exec_depend>getup</exec_depend>
   <exec_depend>getup_gui</exec_depend>
+  <exec_depend>motion_recorder</exec_depend>
+  <exec_depend>motion_recorder_gui</exec_depend>
+  <exec_depend>ppowalk</exec_depend>
+  <exec_depend>ppowalk_gui</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 
