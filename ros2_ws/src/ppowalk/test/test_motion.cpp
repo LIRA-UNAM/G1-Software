@@ -43,3 +43,23 @@ TEST(SafeMove, Blend)
   EXPECT_DOUBLE_EQ(q[0], 0.5);
   EXPECT_DOUBLE_EQ(q[1], 2.0);
 }
+
+TEST(Remote, StickCommand)
+{
+  // Deadzone: exactly zero, so a released stick means "stand still".
+  EXPECT_EQ(ppowalk::stick_command(0.0, 0.1, -0.7, 0.7), 0.0);
+  EXPECT_EQ(ppowalk::stick_command(0.09, 0.1, -0.7, 0.7), 0.0);
+  EXPECT_EQ(ppowalk::stick_command(-0.1, 0.1, -0.7, 0.7), 0.0);
+  // Full deflection reaches the (asymmetric) limits.
+  EXPECT_DOUBLE_EQ(ppowalk::stick_command(1.0, 0.1, -0.5, 0.7), 0.7);
+  EXPECT_DOUBLE_EQ(ppowalk::stick_command(-1.0, 0.1, -0.5, 0.7), -0.5);
+  // Linear between the deadzone and full deflection.
+  EXPECT_NEAR(ppowalk::stick_command(0.55, 0.1, -0.7, 0.7), 0.35, 1e-12);
+  EXPECT_NEAR(ppowalk::stick_command(-0.55, 0.1, -0.7, 0.7), -0.35, 1e-12);
+  // Out of range / invalid input.
+  EXPECT_DOUBLE_EQ(ppowalk::stick_command(3.0, 0.1, -0.7, 0.7), 0.7);
+  EXPECT_EQ(ppowalk::stick_command(std::nan(""), 0.1, -0.7, 0.7), 0.0);
+  // No deadzone; a zero limit blocks that direction.
+  EXPECT_DOUBLE_EQ(ppowalk::stick_command(0.5, 0.0, -0.7, 0.7), 0.35);
+  EXPECT_EQ(ppowalk::stick_command(-0.8, 0.1, 0.0, 0.7), 0.0);
+}

@@ -18,6 +18,15 @@
     status: null,
     command: { vx: 0, vy: 0, wz: 0 },
     commandTimer: null,
+    source: null,  // velocity command source: "remote", "gui" or "cmd_vel"
+    sourceHoldUntil: 0,  // ignore the status source briefly after switching it
+    remoteEvents: null,
+  };
+
+  const SOURCE_HINTS = {
+    gui: "Sent to the policy while it runs (cmd_vx / cmd_vy / cmd_wz). Slider ranges follow the limits in the policy panel.",
+    remote: "The remote's sticks command the velocity (see Remote controller below); the sliders are inactive.",
+    cmd_vel: "The command comes from geometry_msgs/Twist on /cmd_vel; the sliders are inactive.",
   };
 
   // ---------------------------------------------------------------- transport
@@ -51,6 +60,7 @@
       document.getElementById("bridge-node").textContent = message.config.bridge_node;
       buildScalarForm("policy", message.config.policy_specs);
       buildScalarForm("policy", message.config.offset_specs, "params-offsets");
+      buildScalarForm("policy", message.config.remote_specs || [], "params-remote");
       buildScalarForm("bridge", message.config.bridge_specs);
       readParameters();
     } else if (message.type === "status") {
@@ -141,6 +151,7 @@
     document.getElementById("command-effective").textContent = !policy.online || !policy.command_raw ? "—"
       : `requested (${policy.command_raw.map((v) => v.toFixed(2)).join(", ")}) + offset (` +
         `${policy.command_offset.map((v) => v.toFixed(2)).join(", ")}) → (${policy.command.map((v) => v.toFixed(2)).join(", ")})`;
+    renderRemote(policy);
     const offline = bridge.online ? (bridge.offline_joints || []) : [];
     document.getElementById("offline").textContent = !bridge.online ? "—"
       : offline.length ? offline.map((n) => n.replace(/_joint$/, "")).join(", ") : "none";
@@ -168,8 +179,11 @@
     }
     const blocked = reasons.some((r) => !r.startsWith("note:"));
     document.getElementById("start").disabled = blocked;
+    const remoteStart = policy.online && policy.remote && policy.remote.remote_start
+      ? " The remote's Start button does the same, with the same checks." : "";
     document.getElementById("start-hint").textContent =
-      reasons.length ? `Start ${blocked ? "blocked" : "allowed"}: ${reasons.join("; ")}` : "Start allowed.";
+      (reasons.length ? `Start ${blocked ? "blocked" : "allowed"}: ${reasons.join("; ")}.` : "Start allowed.") +
+      remoteStart;
     document.getElementById("home").disabled = !policy.online || !policy.data_fresh;
     document.getElementById("stop").disabled = !policy.online || mode === "IDLE";
     document.getElementById("release").disabled = !policy.online || mode === "IDLE";
@@ -179,7 +193,57 @@
     toggle.disabled = !bridge.online;
   }
 
+  function renderRemote(policy) {
+    const remote = (policy.online && policy.remote) || {};
+    const live = policy.online && remote.fresh;
+    const sticks = remote.sticks || [0, 0, 0, 0];
+    const pair = (a, b) => `(${a.toFixed(2)}, ${b.toFixed(2)})`;
+    document.getElementById("remote-state").textContent = !policy.online ? "—"
+      : `${live ? "live" : "NO DATA"} · Start button ${remote.remote_start ? "on" : "off"}`;
+    document.getElementById("remote-left").textContent = live ? pair(sticks[0], sticks[1]) : "—";
+    document.getElementById("remote-right").textContent = live ? pair(sticks[2], sticks[3]) : "—";
+    document.getElementById("remote-buttons").textContent =
+      live ? ((remote.buttons || []).join(", ") || "none") : "—";
+    document.getElementById("remote-event").textContent = remote.events
+      ? `Last remote event (${fmtAge(remote.event_age)} ago): ${remote.last_event}` : "";
+    const events = policy.online ? (remote.events || 0) : null;
+    if (events !== null && state.remoteEvents !== null && events > state.remoteEvents) {
+      setStatus(`Remote: ${remote.last_event}`);
+    }
+    if (events !== null) state.remoteEvents = events;
+    if (policy.online && Date.now() > state.sourceHoldUntil) {
+      const src = String(policy.command_source || "").startsWith("cmd_vel") ? "cmd_vel"
+        : remote.use_remote ? "remote" : "gui";
+      if (src !== state.source) setSource(src);
+    }
+  }
+
   // ---------------------------------------------------------- velocity command
+
+  function setSource(src) {
+    state.source = src;
+    for (const radio of document.querySelectorAll('input[name="source"]')) radio.checked = radio.value === src;
+    const gui = src === "gui";
+    for (const input of document.querySelectorAll("#command input")) input.disabled = !gui;
+    document.getElementById("zero").disabled = !gui;
+    document.getElementById("command-hint").textContent = SOURCE_HINTS[src] || "";
+  }
+
+  async function changeSource(src) {
+    const previous = state.source;
+    state.sourceHoldUntil = Date.now() + 5000;
+    try {
+      const result = await sendCommand("set_source", { source: src });
+      if (!result.ok) throw new Error(result.reason || "rejected");
+      setSource(src);
+      setStatus(`Command source: ${src}`);
+    } catch (err) {
+      setStatus(`Command source REJECTED (${err.message})`);
+      if (previous) setSource(previous);
+    } finally {
+      state.sourceHoldUntil = Date.now() + 500;  // let the status catch up
+    }
+  }
 
   function buildCommandForm() {
     const container = document.getElementById("command");
@@ -219,6 +283,7 @@
       row.appendChild(number);
       container.appendChild(row);
     }
+    if (state.source) setSource(state.source);
   }
 
   function scheduleCommand() {
@@ -413,7 +478,8 @@
   function showValues() {
     for (const node of ["policy", "bridge"]) {
       const specs = node === "policy"
-        ? state.config.policy_specs.concat(state.config.offset_specs || []) : state.config.bridge_specs;
+        ? state.config.policy_specs.concat(state.config.offset_specs || [], state.config.remote_specs || [])
+        : state.config.bridge_specs;
       for (const spec of specs) {
         if (state.dirty[key(node, spec.name)]) continue;
         const input = document.getElementById(`param_${node}_${spec.name}`);
@@ -428,6 +494,9 @@
     const pathInput = document.getElementById("policy-path");
     if (document.activeElement !== pathInput && policy.policy_path !== undefined) {
       pathInput.value = policy.policy_path;
+    }
+    if (policy.use_remote !== undefined && Date.now() > state.sourceHoldUntil) {
+      state.source = policy.use_cmd_vel ? "cmd_vel" : policy.use_remote ? "remote" : "gui";
     }
     buildCommandForm();
     buildJointTable();
@@ -495,6 +564,11 @@
     apply("policy", "home_pose", (state.values.policy.default_joint_pos || []).slice()).then(() => showValues());
   });
   document.querySelectorAll("button.refresh").forEach((b) => b.addEventListener("click", readParameters));
+  for (const radio of document.querySelectorAll('input[name="source"]')) {
+    radio.addEventListener("change", () => {
+      if (radio.checked) changeSource(radio.value);
+    });
+  }
 
   connect();
 })();

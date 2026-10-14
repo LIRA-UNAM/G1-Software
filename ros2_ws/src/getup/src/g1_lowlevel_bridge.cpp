@@ -5,6 +5,7 @@
 //
 //   /lowstate (unitree_hg/LowState) -> /imu (sensor_msgs/Imu)
 //                                    -> /joint_states (sensor_msgs/JointState)
+//                                    -> /wireless_remote (sensor_msgs/Joy)
 //   /getup/joint_command (sensor_msgs/JointState, positions) -> /lowcmd
 //
 // LowCmd is streamed at a fixed rate with per-joint Kp/Kd from parameters.
@@ -19,6 +20,13 @@
 // are never tracked: they get damping only. A joint that goes offline during a
 // tracking session stays passive until the next session starts, so a motor
 // that reconnects mid-motion does not jump to a stale target.
+//
+// Wireless remote: LowState.wireless_remote is republished as sensor_msgs/Joy
+// at remote_rate_hz (0 disables it). axes = [lx, ly, rx, ry, L2] in [-1, 1]
+// (+x right, +y forward); buttons in Unitree bit order [R1, L1, start, select,
+// R2, L2, F1, F2, A, B, X, Y, up, right, down, left]. A button reads 1 if it
+// was down in any lowstate sample since the previous message, so a short
+// press is never lost to the lower rate.
 //
 // Emergency stop: a latched e-stop (~/estop service, /getup/estop topic or
 // loss of the GUI heartbeat on /getup/heartbeat) forces damping regardless of
@@ -35,9 +43,11 @@
 #include <vector>
 
 #include "getup/motor_crc.hpp"
+#include "getup/wireless_remote.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
+#include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/empty.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -85,6 +95,8 @@ public:
     const auto heartbeat_topic =
       declare_parameter<std::string>("heartbeat_topic", "/getup/heartbeat");
     imu_frame_id_ = declare_parameter<std::string>("imu_frame_id", "imu_in_pelvis");
+    const auto remote_topic = declare_parameter<std::string>("remote_topic", "/wireless_remote");
+    remote_rate_hz_ = declare_parameter<double>("remote_rate_hz", 50.0);
 
     const size_t n = joint_names_.size();
     if (n == 0 || n > kNumMotorSlots) {
@@ -123,12 +135,18 @@ public:
     joint_state_msg_.velocity.assign(n, 0.0);
     joint_state_msg_.effort.assign(n, 0.0);
     imu_msg_.header.frame_id = imu_frame_id_;
+    remote_msg_.header.frame_id = "wireless_remote";
+    remote_msg_.axes.assign(5, 0.0f);
+    remote_msg_.buttons.assign(WirelessRemote::kNumButtons, 0);
 
     imu_pub_ = create_publisher<sensor_msgs::msg::Imu>(imu_topic, rclcpp::SensorDataQoS());
     joint_state_pub_ =
       create_publisher<sensor_msgs::msg::JointState>(joint_states_topic, rclcpp::SensorDataQoS());
     lowcmd_pub_ = create_publisher<unitree_hg::msg::LowCmd>(lowcmd_topic, 10);
     status_pub_ = create_publisher<std_msgs::msg::String>("~/status", 10);
+    if (remote_rate_hz_ > 0.0) {
+      remote_pub_ = create_publisher<sensor_msgs::msg::Joy>(remote_topic, 10);
+    }
     // Re-broadcast latches from any source (e.g. the dead-man) so the policy
     // node stops as well.
     estop_pub_ = create_publisher<std_msgs::msg::Bool>(estop_topic, rclcpp::QoS(10).reliable());
@@ -185,6 +203,11 @@ public:
       lowstate_topic.c_str(), imu_topic.c_str(), joint_states_topic.c_str(),
       command_topic.c_str(), lowcmd_topic.c_str(), lowcmd_rate_hz,
       enable_lowcmd_ ? "ENABLED" : "disabled (set enable_lowcmd:=true)");
+    if (remote_pub_) {
+      RCLCPP_INFO(
+        get_logger(), "Wireless remote -> %s (sensor_msgs/Joy, %.0f Hz)", remote_topic.c_str(),
+        remote_rate_hz_);
+    }
   }
 
 private:
@@ -223,7 +246,8 @@ private:
   {
     static const std::set<std::string> kReadOnly = {
       "joint_names", "motor_indices", "mode_pr", "lowcmd_rate_hz", "lowstate_topic", "lowcmd_topic", "imu_topic",
-      "joint_states_topic", "command_topic", "estop_topic", "heartbeat_topic", "imu_frame_id"};
+      "joint_states_topic", "command_topic", "estop_topic", "heartbeat_topic", "imu_frame_id",
+      "remote_topic", "remote_rate_hz"};
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = false;
 
@@ -354,7 +378,30 @@ private:
       joint_state_msg_.effort[i] = m.tau_est;
     }
     joint_state_pub_->publish(joint_state_msg_);
+    if (remote_pub_) {
+      publish_remote(msg, stamp);
+    }
     last_lowstate_ = SteadyClock::now();
+  }
+
+  void publish_remote(const unitree_hg::msg::LowState & msg, const rclcpp::Time & stamp)
+  {
+    const auto remote = decode_wireless_remote(msg.wireless_remote.data());
+    remote_keys_ |= remote.keys;
+    const auto t = SteadyClock::now();
+    if (last_remote_pub_ &&
+      std::chrono::duration<double>(t - *last_remote_pub_).count() < 1.0 / remote_rate_hz_)
+    {
+      return;
+    }
+    last_remote_pub_ = t;
+    remote_msg_.header.stamp = stamp;
+    remote_msg_.axes = {remote.lx, remote.ly, remote.rx, remote.ry, remote.l2};
+    for (int b = 0; b < WirelessRemote::kNumButtons; ++b) {
+      remote_msg_.buttons[b] = (remote_keys_ >> b) & 1u;
+    }
+    remote_keys_ = 0;
+    remote_pub_->publish(remote_msg_);
   }
 
   void on_command(const sensor_msgs::msg::JointState & msg)
@@ -536,6 +583,7 @@ private:
   double command_timeout_{0.1};
   double heartbeat_timeout_{0.5};
   std::string imu_frame_id_;
+  double remote_rate_hz_{50.0};
 
   // State.
   std::unordered_map<std::string, size_t> name_to_motor_;  // joint name -> joint index
@@ -553,15 +601,19 @@ private:
   std::optional<SteadyClock::time_point> last_lowstate_;
   std::optional<SteadyClock::time_point> last_command_;
   std::optional<SteadyClock::time_point> last_heartbeat_;
+  uint16_t remote_keys_{0};  // buttons down in any sample since the last Joy message
+  std::optional<SteadyClock::time_point> last_remote_pub_;
 
   // ROS interfaces.
   sensor_msgs::msg::Imu imu_msg_;
   sensor_msgs::msg::JointState joint_state_msg_;
+  sensor_msgs::msg::Joy remote_msg_;
   unitree_hg::msg::LowCmd lowcmd_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
   rclcpp::Publisher<unitree_hg::msg::LowCmd>::SharedPtr lowcmd_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr remote_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr estop_pub_;
   rclcpp::Subscription<unitree_hg::msg::LowState>::SharedPtr lowstate_sub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr command_sub_;

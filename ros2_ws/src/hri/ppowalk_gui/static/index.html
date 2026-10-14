@@ -36,6 +36,7 @@
     <div><span>Step</span><b id="policy-step">&mdash;</b></div>
     <div><span>Inference</span><b id="inference">&mdash;</b></div>
     <div><span>Command in use</span><b id="command-live">&mdash;</b></div>
+    <div><span>Remote controller</span><b id="remote-state">&mdash;</b></div>
     <div><span>Offline motors (bridge)</span><b id="offline" class="path">&mdash;</b></div>
     <div class="wide"><span>Commanded joints</span><b id="commanded" class="path">&mdash;</b></div>
     <div class="wide"><span>Pinned observations</span><b id="pinned" class="path">&mdash;</b></div>
@@ -49,6 +50,7 @@
     <button id="motor-toggle" class="warn">Enable motor output</button>
   </div>
   <p id="start-hint" class="hint"></p>
+  <p id="remote-event" class="hint"></p>
 </section>
 
 <main class="columns">
@@ -57,8 +59,24 @@
       <h2>Velocity command</h2>
       <button id="zero" class="secondary">Zero</button>
     </div>
+    <div class="param-row source-row">
+      <label>Command source</label>
+      <div id="source" class="groups">
+        <label><input type="radio" name="source" value="remote"> Remote controller</label>
+        <label><input type="radio" name="source" value="gui"> GUI sliders</label>
+        <label><input type="radio" name="source" value="cmd_vel"> /cmd_vel topic</label>
+      </div>
+    </div>
     <div id="command" class="params"></div>
-    <p class="hint">Sent to the policy while it runs (cmd_vx / cmd_vy / cmd_wz). Slider ranges follow the limits in the policy panel.</p>
+    <p id="command-hint" class="hint">Sent to the policy while it runs (cmd_vx / cmd_vy / cmd_wz). Slider ranges follow the limits in the policy panel.</p>
+    <h3>Remote controller</h3>
+    <div class="state-grid remote-grid">
+      <div><span>Left stick (lx, ly)</span><b id="remote-left">&mdash;</b></div>
+      <div><span>Right stick (rx, ry)</span><b id="remote-right">&mdash;</b></div>
+      <div><span>Buttons held</span><b id="remote-buttons">&mdash;</b></div>
+    </div>
+    <div id="params-remote" class="params"></div>
+    <p class="hint">With the remote as source: left stick up/down = forward/back (vx), left/right = sideways (vy); right stick left/right = turn (wz). Full deflection reaches the velocity limits; inside the deadzone the command is exactly 0. Start on the remote runs the same Start as the button above, with the same checks (robot upright within the max tilt, leg motors online, fresh data, model loaded).</p>
     <h3>Calibration offsets</h3>
     <div id="params-offsets" class="params"></div>
     <p class="hint">Added to the command to cancel the robot's drift (e.g. a negative vy offset if it walks slightly left when going straight). Applied only while motion is commanded unless the checkbox is set; the sum is clamped to the limits.</p>

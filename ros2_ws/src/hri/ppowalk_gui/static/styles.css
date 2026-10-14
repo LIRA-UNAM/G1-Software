@@ -514,3 +514,21 @@ thead td.col-flag {
 td.col-flag input {
   width: auto;
 }
+
+.source-row .groups label {
+  white-space: nowrap;
+}
+
+.remote-grid {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.command-row input:disabled {
+  opacity: 0.45;
+}
+
+/* Let grid panels shrink below the joint table's width (it scrolls inside
+   .table-wrap) so narrow screens get no horizontal page scroll. */
+.columns > * {
+  min-width: 0;
+}

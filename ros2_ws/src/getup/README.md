@@ -8,7 +8,7 @@ Two nodes:
 
 | Node | In | Out |
 |------|----|-----|
-| `g1_lowlevel_bridge` | `/lowstate` (`unitree_hg/LowState`), `/getup/joint_command` (`sensor_msgs/JointState`) | `/imu` (`sensor_msgs/Imu`), `/joint_states`, `/lowcmd` (`unitree_hg/LowCmd`, Kp/Kd + CRC) |
+| `g1_lowlevel_bridge` | `/lowstate` (`unitree_hg/LowState`), `/getup/joint_command` (`sensor_msgs/JointState`) | `/imu` (`sensor_msgs/Imu`), `/joint_states`, `/lowcmd` (`unitree_hg/LowCmd`, Kp/Kd + CRC), `/wireless_remote` (`sensor_msgs/Joy`, the Unitree remote's sticks and buttons) |
 | `getup_policy_node` | `/imu`, `/joint_states` | `/getup/joint_command` (position targets, policy joint order), `~/observation`, `~/action` (debug) |
 
 The policy node only depends on generic messages, so it can also be driven by

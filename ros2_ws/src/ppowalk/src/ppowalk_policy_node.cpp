@@ -1,8 +1,10 @@
 // Runs an mjlab-trained velocity-tracking (walking) policy on the Unitree G1.
 //
 // Inputs:  sensor_msgs/Imu (pelvis IMU), sensor_msgs/JointState, a velocity
-//          command (ROS parameters cmd_vx/cmd_vy/cmd_wz, set by the GUI, or
-//          optionally geometry_msgs/Twist on cmd_vel_topic).
+//          command from one source: the Unitree wireless remote (use_remote,
+//          sensor_msgs/Joy republished by the bridge), geometry_msgs/Twist on
+//          cmd_vel_topic (use_cmd_vel) or the ROS parameters cmd_vx/cmd_vy/
+//          cmd_wz set by the GUI (both off).
 // Output:  sensor_msgs/JointState position targets for all joints, consumed by
 //          getup's g1_lowlevel_bridge.
 //
@@ -31,6 +33,13 @@
 // The policy can only be started while the IMU reports the robot upright
 // (tilt <= max_start_tilt_deg). The tilt is computed continuously from the IMU
 // and published in ~/status so the GUI can disable Start.
+//
+// Wireless remote: with use_remote the left stick commands vx (up/down) and vy
+// (left/right) and the right stick wz (left/right), scaled so that full
+// deflection reaches the velocity limits (remote_deadzone gives an exact 0).
+// With remote_start, pressing Start on the remote runs the same Start as the
+// ~/start service, with all its checks (upright, leg motors online, fresh
+// data, model loaded); a refused press is logged and reported in ~/status.
 
 #include <algorithm>
 #include <array>
@@ -47,10 +56,12 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "getup/observation.hpp"
 #include "getup/onnx_policy.hpp"
+#include "getup/wireless_remote.hpp"
 #include "ppowalk/motion.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
+#include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/float32_multi_array.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -102,6 +113,12 @@ public:
     offsets_when_standing_ = declare_parameter<bool>("offsets_when_standing", false);
     use_cmd_vel_ = declare_parameter<bool>("use_cmd_vel", false);
     cmd_vel_timeout_ = declare_parameter<double>("cmd_vel_timeout_s", 0.5);
+    // Wireless remote: sticks -> velocity command (use_remote), Start button ->
+    // Start (remote_start).
+    use_remote_ = declare_parameter<bool>("use_remote", true);
+    remote_start_ = declare_parameter<bool>("remote_start", true);
+    remote_deadzone_ = declare_parameter<double>("remote_deadzone", 0.1);
+    remote_timeout_ = declare_parameter<double>("remote_timeout_s", 0.5);
     // Safety / motion.
     max_start_tilt_deg_ = declare_parameter<double>("max_start_tilt_deg", 30.0);
     start_ramp_s_ = declare_parameter<double>("start_ramp_s", 1.0);
@@ -123,6 +140,7 @@ public:
     const auto command_topic =
       declare_parameter<std::string>("command_topic", "/ppowalk/joint_command");
     const auto cmd_vel_topic = declare_parameter<std::string>("cmd_vel_topic", "/cmd_vel");
+    const auto remote_topic = declare_parameter<std::string>("remote_topic", "/wireless_remote");
     const bool publish_debug = declare_parameter<bool>("publish_debug", true);
 
     const size_t n = joint_names_.size();
@@ -185,6 +203,10 @@ public:
     if (!error.empty()) {
       throw std::invalid_argument(error);
     }
+    error = check_remote(use_remote_, use_cmd_vel_, remote_deadzone_, remote_timeout_);
+    if (!error.empty()) {
+      throw std::invalid_argument(error);
+    }
     apply_command_joints(command_joint_names_);
     manual_pin_ = name_mask(pinned_names_);
     offline_now_.assign(n, false);
@@ -229,6 +251,9 @@ public:
         cmd_vel_ = {msg->linear.x, msg->linear.y, msg->angular.z};
         last_cmd_vel_ = SteadyClock::now();
       });
+    remote_sub_ = create_subscription<sensor_msgs::msg::Joy>(
+      remote_topic, 10,
+      [this](sensor_msgs::msg::Joy::ConstSharedPtr msg) {on_remote(*msg);});
 
     command_pub_ = create_publisher<sensor_msgs::msg::JointState>(command_topic, 10);
     status_pub_ = create_publisher<std_msgs::msg::String>("~/status", 10);
@@ -259,6 +284,10 @@ public:
       get_logger(), "ppowalk ready: %zu joints, %zu actions, %zu obs, policy %.0f Hz, start "
       "allowed below %.0f deg tilt. Model: %s", n, action_index_.size(), obs_builder_->size(),
       policy_rate_hz_, max_start_tilt_deg_, policy_path_.empty() ? "(none)" : policy_path_.c_str());
+    RCLCPP_INFO(
+      get_logger(), "Velocity command from %s; remote Start button %s (%s)",
+      use_cmd_vel_ ? "cmd_vel" : use_remote_ ? "the wireless remote" : "the GUI",
+      remote_start_ ? "enabled" : "disabled", remote_topic.c_str());
   }
 
 private:
@@ -301,6 +330,21 @@ private:
       if (std::find(names.begin(), names.end(), a) == names.end()) {
         return "command_joints must include " + a + " (always_commanded_joints)";
       }
+    }
+    return "";
+  }
+
+  static std::string check_remote(
+    bool use_remote, bool use_cmd_vel, double deadzone, double timeout)
+  {
+    if (use_remote && use_cmd_vel) {
+      return "use_remote and use_cmd_vel are exclusive (one velocity command source)";
+    }
+    if (deadzone < 0.0 || deadzone > 0.9) {
+      return "remote_deadzone must be in [0, 0.9]";
+    }
+    if (timeout <= 0.0) {
+      return "remote_timeout_s must be > 0";
     }
     return "";
   }
@@ -438,7 +482,7 @@ private:
     static const std::set<std::string> kReadOnly = {
       "joint_names", "action_joint_names", "observation_terms", "num_obs", "num_threads",
       "imu_topic", "joint_states_topic", "command_topic", "cmd_vel_topic", "publish_debug",
-      "always_commanded_joints"};
+      "always_commanded_joints", "remote_topic"};
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = false;
 
@@ -457,6 +501,8 @@ private:
     double home_vel = home_max_vel_, home_min = home_min_duration_;
     double cmd_vel_timeout = cmd_vel_timeout_;
     bool use_cmd_vel = use_cmd_vel_;
+    bool use_remote = use_remote_, remote_start = remote_start_;
+    double remote_deadzone = remote_deadzone_, remote_timeout = remote_timeout_;
     auto command_joints = command_joint_names_;
     auto held_targets = held_targets_;
     auto pinned_names = pinned_names_;
@@ -527,6 +573,14 @@ private:
           use_cmd_vel = p.as_bool();
         } else if (name == "cmd_vel_timeout_s") {
           cmd_vel_timeout = p.as_double();
+        } else if (name == "use_remote") {
+          use_remote = p.as_bool();
+        } else if (name == "remote_start") {
+          remote_start = p.as_bool();
+        } else if (name == "remote_deadzone") {
+          remote_deadzone = p.as_double();
+        } else if (name == "remote_timeout_s") {
+          remote_timeout = p.as_double();
         } else if (name == "policy_path") {
           policy_path = p.as_string();
         } else if (name == "command_joints") {
@@ -561,6 +615,10 @@ private:
     }
     if (max_tilt <= 0.0 || max_tilt > 90.0) {
       result.reason = "max_start_tilt_deg must be in (0, 90]";
+      return result;
+    }
+    result.reason = check_remote(use_remote, use_cmd_vel, remote_deadzone, remote_timeout);
+    if (!result.reason.empty()) {
       return result;
     }
     if (policy_rate <= 0.0 || command_rate <= 0.0 || policy_rate > 1000.0 ||
@@ -613,6 +671,15 @@ private:
     home_min_duration_ = home_min;
     use_cmd_vel_ = use_cmd_vel;
     cmd_vel_timeout_ = cmd_vel_timeout;
+    if (use_remote != use_remote_ || remote_start != remote_start_) {
+      RCLCPP_WARN(
+        get_logger(), "Wireless remote: velocity command %s, Start button %s",
+        use_remote ? "ON" : "off", remote_start ? "ON" : "off");
+    }
+    use_remote_ = use_remote;
+    remote_start_ = remote_start;
+    remote_deadzone_ = remote_deadzone;
+    remote_timeout_ = remote_timeout;
     held_targets_ = std::move(held_targets);
     pinned_names_ = std::move(pinned_names);
     manual_pin_ = name_mask(pinned_names_);
@@ -695,9 +762,62 @@ private:
     last_js_ = SteadyClock::now();
   }
 
+  // Wireless remote (sensor_msgs/Joy from the bridge, Unitree button order).
+  void on_remote(const sensor_msgs::msg::Joy & msg)
+  {
+    using getup::WirelessRemote;
+    if (msg.axes.size() < 4 || msg.buttons.size() < WirelessRemote::kNumButtons) {
+      RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 2000, "Remote message needs >= 4 axes and %d buttons",
+        static_cast<int>(WirelessRemote::kNumButtons));
+      return;
+    }
+    remote_axes_ = {msg.axes[0], msg.axes[1], msg.axes[2], msg.axes[3]};
+    remote_buttons_ = 0;
+    for (int b = 0; b < WirelessRemote::kNumButtons; ++b) {
+      if (msg.buttons[b]) {
+        remote_buttons_ |= 1u << b;
+      }
+    }
+    last_remote_ = SteadyClock::now();
+    // Start acts on the press (rising edge) only. A button already held when
+    // the first message arrives does not count.
+    const bool start_down = msg.buttons[WirelessRemote::kStart] != 0;
+    const bool pressed = remote_start_down_ && !*remote_start_down_ && start_down;
+    remote_start_down_ = start_down;
+    if (!pressed) {
+      return;
+    }
+    if (!remote_start_) {
+      remote_event("Start button ignored (remote_start is off)");
+      return;
+    }
+    RCLCPP_INFO(get_logger(), "Remote: Start button pressed");
+    std::string message;
+    const bool ok = start(message);
+    remote_event(ok ? "Start button: policy started" : "Start button: refused (" + message + ")");
+  }
+
+  void remote_event(const std::string & text)
+  {
+    remote_event_.clear();
+    for (char ch : text) {
+      if (ch != '"' && ch != '\\') {
+        remote_event_ += ch;
+      }
+    }
+    last_remote_event_ = SteadyClock::now();
+    ++remote_events_;
+  }
+
   static double age(const std::optional<SteadyClock::time_point> & t)
   {
     return t ? std::chrono::duration<double>(SteadyClock::now() - *t).count() : -1.0;
+  }
+
+  bool remote_fresh() const
+  {
+    return last_remote_ && age(last_remote_) < remote_timeout_;
   }
 
   bool data_fresh() const
@@ -711,16 +831,38 @@ private:
     return last_imu_ && age(last_imu_) < data_timeout_ && tilt_deg_ <= max_start_tilt_deg_;
   }
 
-  // Velocity command in use: cmd_vel (if enabled and fresh) else the GUI
-  // parameters, clamped to the configured limits.
-  // Requested command: cmd_vel (if enabled and fresh) or the GUI parameters.
+  // Requested command: cmd_vel or the remote sticks (0 while their data is
+  // stale), else the GUI parameters.
   std::array<double, 3> raw_command() const
   {
     if (use_cmd_vel_) {
       return (last_cmd_vel_ && age(last_cmd_vel_) < cmd_vel_timeout_) ?
              cmd_vel_ : std::array<double, 3>{0.0, 0.0, 0.0};
     }
+    if (use_remote_) {
+      if (!remote_fresh()) {
+        return {0.0, 0.0, 0.0};
+      }
+      // Stick up = forward, stick right = -y (robot y points left) and a
+      // clockwise turn (-wz).
+      const double lx = remote_axes_[0], ly = remote_axes_[1], rx = remote_axes_[2];
+      return {stick_command(ly, remote_deadzone_, cmd_min_[0], cmd_max_[0]),
+        stick_command(-lx, remote_deadzone_, cmd_min_[1], cmd_max_[1]),
+        stick_command(-rx, remote_deadzone_, cmd_min_[2], cmd_max_[2])};
+    }
     return cmd_;
+  }
+
+  std::string command_source() const
+  {
+    if (use_cmd_vel_) {
+      return last_cmd_vel_ && age(last_cmd_vel_) < cmd_vel_timeout_ ? "cmd_vel" :
+             "cmd_vel (stale: 0)";
+    }
+    if (use_remote_) {
+      return remote_fresh() ? "remote" : "remote (no data: 0)";
+    }
+    return "gui";
   }
 
   // Command fed to the policy: requested + calibration offsets (only while
@@ -936,7 +1078,6 @@ private:
         path += ch;
       }
     }
-    const bool cmd_vel_live = use_cmd_vel_ && last_cmd_vel_ && age(last_cmd_vel_) < cmd_vel_timeout_;
     char buf[1024];
     std::snprintf(
       buf, sizeof(buf),
@@ -947,7 +1088,7 @@ private:
       mode_name(mode_), step_, upright() ? "true" : "false", last_imu_ ? tilt_deg_ : -1.0,
       max_start_tilt_deg_, data_fresh() ? "true" : "false", age(last_imu_), age(last_js_),
       inference_ms_, policy_ ? "true" : "false", path.c_str(), c[0], c[1], c[2],
-      use_cmd_vel_ ? (cmd_vel_live ? "cmd_vel" : "cmd_vel (stale: 0)") : "gui");
+      command_source().c_str());
     std::string json = buf;
     json.pop_back();
     const auto raw = raw_command();
@@ -958,10 +1099,31 @@ private:
     json += extra;
     json += ",\"command_joints\":" + json_list(command_joint_names_) +
       ",\"pinned_joints\":" + json_list(names_where(pinned_mask())) +
-      ",\"offline_detected\":" + json_list(names_where(offline_now_)) + "}";
+      ",\"offline_detected\":" + json_list(names_where(offline_now_)) + ",\"remote\":" +
+      remote_status() + "}";
     std_msgs::msg::String msg;
     msg.data = json;
     status_pub_->publish(msg);
+  }
+
+  std::string remote_status() const
+  {
+    std::vector<std::string> buttons;
+    for (int b = 0; b < getup::WirelessRemote::kNumButtons; ++b) {
+      if (remote_buttons_ & (1u << b)) {
+        buttons.push_back(getup::remote_button_name(b));
+      }
+    }
+    char buf[384];
+    std::snprintf(
+      buf, sizeof(buf),
+      "{\"use_remote\":%s,\"remote_start\":%s,\"fresh\":%s,\"age\":%.3f,"
+      "\"sticks\":[%.3f,%.3f,%.3f,%.3f],\"events\":%d,\"event_age\":%.1f,\"last_event\":\"",
+      use_remote_ ? "true" : "false", remote_start_ ? "true" : "false",
+      remote_fresh() ? "true" : "false", age(last_remote_), remote_axes_[0], remote_axes_[1],
+      remote_axes_[2], remote_axes_[3], remote_events_, age(last_remote_event_));
+    return buf + remote_event_ + "\",\"buttons\":" +
+           json_list(remote_fresh() ? buttons : std::vector<std::string>{}) + "}";
   }
 
   // Parameters.
@@ -985,6 +1147,10 @@ private:
   bool offsets_when_standing_{false};
   bool use_cmd_vel_{false};
   double cmd_vel_timeout_{0.5};
+  bool use_remote_{true};
+  bool remote_start_{true};
+  double remote_deadzone_{0.1};
+  double remote_timeout_{0.5};
   double max_start_tilt_deg_{30.0};
   double start_ramp_s_{1.0};
   std::vector<double> home_pose_;
@@ -1024,12 +1190,20 @@ private:
   std::optional<SteadyClock::time_point> last_js_;
   std::array<double, 3> cmd_vel_{0.0, 0.0, 0.0};
   std::optional<SteadyClock::time_point> last_cmd_vel_;
+  std::array<double, 4> remote_axes_{0.0, 0.0, 0.0, 0.0};  // lx, ly, rx, ry
+  uint32_t remote_buttons_{0};
+  std::optional<SteadyClock::time_point> last_remote_;
+  std::optional<bool> remote_start_down_;  // Start button state in the last message
+  std::string remote_event_;
+  std::optional<SteadyClock::time_point> last_remote_event_;
+  int remote_events_{0};
 
   // ROS interfaces.
   sensor_msgs::msg::JointState command_msg_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr remote_sub_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr command_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr obs_pub_;

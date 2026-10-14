@@ -30,7 +30,6 @@ POLICY_SPECS = [
     _num("lin_vel_y_max", "vy max", "m/s", 0.0, 3.0, 0.05),
     _num("ang_vel_z_min", "wz min", "rad/s", -3.0, 0.0, 0.05),
     _num("ang_vel_z_max", "wz max", "rad/s", 0.0, 3.0, 0.05),
-    {"name": "use_cmd_vel", "label": "Take command from cmd_vel topic", "unit": "", "type": "bool"},
     {"name": "detect_offline", "label": "Pin obs of motors detected offline", "unit": "",
      "type": "bool"},
     _num("cmd_vel_timeout_s", "cmd_vel timeout (falls back to 0)", "s", 0.05, 5.0, 0.05),
@@ -44,6 +43,18 @@ OFFSET_SPECS = [
     {"name": "offsets_when_standing", "label": "Apply offsets with a zero command", "unit": "",
      "type": "bool"},
 ]
+
+# Wireless remote (shown in the command panel).
+REMOTE_SPECS = [
+    {"name": "remote_start", "label": "Remote Start button starts the policy", "unit": "",
+     "type": "bool"},
+    _num("remote_deadzone", "Stick deadzone", "", 0.0, 0.9, 0.01),
+    _num("remote_timeout_s", "Remote data timeout (falls back to 0)", "s", 0.05, 5.0, 0.05),
+]
+
+# Velocity command source -> (use_remote, use_cmd_vel); set atomically.
+SOURCE_PARAMS = ["use_remote", "use_cmd_vel"]
+COMMAND_SOURCES = {"remote": (True, False), "gui": (False, False), "cmd_vel": (False, True)}
 
 # Scalar parameters of getup's g1_lowlevel_bridge.
 BRIDGE_SPECS = [
@@ -82,7 +93,7 @@ JOINT_FLAGS = [
      "title": "Report this joint at its hold target, at rest, in the observation."},
 ]
 POLICY_EXTRA = ["joint_names", "action_joint_names", "observation_terms", "observation_scales",
-                "policy_path", "always_commanded_joints"] + COMMAND_PARAMS + [
+                "policy_path", "always_commanded_joints"] + COMMAND_PARAMS + SOURCE_PARAMS + [
                     f["name"] for f in JOINT_FLAGS]
 BRIDGE_EXTRA = ["joint_names", "enable_lowcmd"]
 
@@ -97,8 +108,10 @@ TYPE_MAP = {
 
 def _param_types():
     types = {"policy": {}, "bridge": {}}
-    for spec in POLICY_SPECS + OFFSET_SPECS:
+    for spec in POLICY_SPECS + OFFSET_SPECS + REMOTE_SPECS:
         types["policy"][spec["name"]] = spec["type"]
+    for name in SOURCE_PARAMS:
+        types["policy"][name] = "bool"
     for spec in BRIDGE_SPECS:
         types["bridge"][spec["name"]] = spec["type"]
     for col in JOINT_COLUMNS:
@@ -148,6 +161,7 @@ class PpowalkGuiBridge(Node):
     def config(self):
         return {"policy_node": self._targets["policy"], "bridge_node": self._targets["bridge"],
                 "policy_specs": POLICY_SPECS, "offset_specs": OFFSET_SPECS,
+                "remote_specs": REMOTE_SPECS,
                 "bridge_specs": BRIDGE_SPECS,
                 "joint_columns": JOINT_COLUMNS, "joint_flags": JOINT_FLAGS}
 
@@ -174,6 +188,12 @@ class PpowalkGuiBridge(Node):
             values = {name: command.get(key, 0.0)
                       for name, key in zip(COMMAND_PARAMS, ("vx", "vy", "wz"))}
             return self._set_target_parameters("policy", values)
+        if action == "set_source":
+            source = command.get("source")
+            if source not in COMMAND_SOURCES:
+                raise ValueError("unknown_source:%s" % source)
+            return self._set_target_parameters(
+                "policy", dict(zip(SOURCE_PARAMS, COMMAND_SOURCES[source])))
         if action in TRIGGERS:
             result = self._wait_and_call(self._triggers[action], Trigger.Request())
             return {"ok": result.success, "message": result.message}
@@ -192,7 +212,8 @@ class PpowalkGuiBridge(Node):
 
     def _read_all(self):
         names = {
-            "policy": [s["name"] for s in POLICY_SPECS + OFFSET_SPECS] + POLICY_EXTRA + [
+            "policy": [s["name"] for s in POLICY_SPECS + OFFSET_SPECS + REMOTE_SPECS] +
+            POLICY_EXTRA + [
                 c["name"] for c in JOINT_COLUMNS if c["node"] == "policy"],
             "bridge": [s["name"] for s in BRIDGE_SPECS] + BRIDGE_EXTRA + [
                 c["name"] for c in JOINT_COLUMNS if c["node"] == "bridge"],

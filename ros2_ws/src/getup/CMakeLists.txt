@@ -63,6 +63,8 @@ if(BUILD_TESTING)
   target_link_libraries(test_observation getup_core)
   ament_add_gtest(test_motor_crc test/test_motor_crc.cpp)
   target_link_libraries(test_motor_crc getup_core)
+  ament_add_gtest(test_wireless_remote test/test_wireless_remote.cpp)
+  target_link_libraries(test_wireless_remote getup_core)
   ament_add_gtest(test_onnx_policy test/test_onnx_policy.cpp)
   target_link_libraries(test_onnx_policy getup_core)
   target_compile_definitions(test_onnx_policy PRIVATE

@@ -73,8 +73,9 @@ ppowalk_policy_node:
     num_threads: 1
     data_timeout_s: 0.1
 
-    # Velocity command (vx m/s, vy m/s, wz rad/s), set live from the GUI, and
-    # its limits (training ranges of the twist command).
+    # GUI velocity command (vx m/s, vy m/s, wz rad/s; used while use_remote
+    # and use_cmd_vel are off) and the limits of every command source
+    # (training ranges of the twist command).
     cmd_vx: 0.0
     cmd_vy: 0.0
     cmd_wz: 0.0
@@ -84,7 +85,7 @@ ppowalk_policy_node:
     lin_vel_y_max: 0.7
     ang_vel_z_min: -0.7
     ang_vel_z_max: 0.7
-    # Calibration offsets added to the command (GUI or cmd_vel) to cancel the
+    # Calibration offsets added to the command (GUI, remote or cmd_vel) to cancel the
     # real robot's drift, e.g. a negative cmd_vy_offset if it walks slightly
     # left with vy = 0. Applied only while motion is commanded (a zero command
     # means "stand still" in training) unless offsets_when_standing. The sum is
@@ -93,7 +94,21 @@ ppowalk_policy_node:
     cmd_vy_offset: 0.0
     cmd_wz_offset: 0.0
     offsets_when_standing: false
-    # Optionally take the command from geometry_msgs/Twist (e.g. a joystick);
+    # Unitree wireless remote (sensor_msgs/Joy republished by the bridge).
+    # use_remote: the sticks command the velocity: left stick up/down = vx,
+    # left/right = vy, right stick left/right = wz; full deflection = the
+    # limits above, |stick| <= remote_deadzone = exactly 0 (stand still). If
+    # the remote data stops for remote_timeout_s the command falls back to 0.
+    # remote_start: pressing Start on the remote starts the policy, with the
+    # same checks as the GUI Start (upright within max_start_tilt_deg, leg
+    # motors online, fresh data, model loaded).
+    # With use_remote and use_cmd_vel both false the GUI sliders command it.
+    use_remote: true
+    remote_start: true
+    remote_deadzone: 0.1
+    remote_timeout_s: 0.5
+    remote_topic: /wireless_remote
+    # Or take the command from geometry_msgs/Twist (exclusive with use_remote);
     # if those messages stop for cmd_vel_timeout_s the command falls back to 0.
     use_cmd_vel: false
     cmd_vel_topic: /cmd_vel

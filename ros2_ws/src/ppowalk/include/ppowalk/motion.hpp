@@ -39,6 +39,23 @@ inline double smooth_alpha(double s)
   return 0.5 - 0.5 * std::cos(M_PI * s);
 }
 
+// Remote stick deflection s in [-1, 1] -> command in [lo, hi] (lo <= 0 <= hi).
+// Inside the deadzone the command is exactly 0 (standing still); beyond it the
+// deflection is rescaled so that full deflection reaches the limit.
+inline double stick_command(double s, double deadzone, double lo, double hi)
+{
+  if (!std::isfinite(s)) {
+    return 0.0;
+  }
+  s = std::clamp(s, -1.0, 1.0);
+  const double mag = std::abs(s);
+  if (mag <= deadzone) {
+    return 0.0;
+  }
+  const double x = (mag - deadzone) / std::max(1.0 - deadzone, 1e-6);
+  return s > 0.0 ? x * hi : -x * std::abs(lo);
+}
+
 inline std::vector<double> blend(
   const std::vector<double> & from, const std::vector<double> & to, double alpha)
 {

@@ -85,3 +85,8 @@ g1_lowlevel_bridge:
     joint_states_topic: /joint_states
     command_topic: /getup/joint_command
     imu_frame_id: imu_in_pelvis
+    # The wireless remote (LowState.wireless_remote) republished as
+    # sensor_msgs/Joy: axes [lx, ly, rx, ry, L2], buttons in Unitree bit order
+    # (R1, L1, start, select, ...). remote_rate_hz: 0 disables it.
+    remote_topic: /wireless_remote
+    remote_rate_hz: 50.0
