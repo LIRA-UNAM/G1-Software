@@ -8,7 +8,18 @@
 //
 // The policy (task Pumas-Velocity-*-Unitree-G1) controls the 12 leg joints with
 // an absolute position action: target = default_joint_pos + action_scale * a.
-// Waist and arms are held at default_joint_pos, as in training.
+// Only command_joints are published (default: legs + waist); the bridge damps
+// the rest. always_commanded_joints (default: the waist, held at 0 as in
+// training) can never be dropped from command_joints. Commanded joints the policy does not drive (waist, arms) are held at
+// held_joint_targets, which is 0 in the training environment (not the
+// default pose).
+//
+// Pinned observations: the joint_pos / joint_vel observation of a joint the
+// policy cannot rely on is reported as if it sat at its hold target, at rest,
+// as in training. That covers every non-commanded joint (limp under damping),
+// every motor detected offline (it reports exactly q = dq = tau = 0; latched
+// for the whole run so a flapping motor cannot leak through) and the manual
+// obs_pinned_joints list. Start is refused while a leg motor is offline.
 //
 // States:
 //   IDLE     nothing is published (the bridge damps the joints)
@@ -82,6 +93,13 @@ public:
     cmd_max_ = {declare_parameter<double>("lin_vel_x_max", 1.0),
       declare_parameter<double>("lin_vel_y_max", 1.0),
       declare_parameter<double>("ang_vel_z_max", 0.5)};
+    // Calibration: added to the command (GUI or cmd_vel) to cancel the drift of
+    // the real robot (e.g. walking slightly left with vy = 0). Applied only
+    // while motion is commanded unless offsets_when_standing.
+    cmd_offset_ = {declare_parameter<double>("cmd_vx_offset", 0.0),
+      declare_parameter<double>("cmd_vy_offset", 0.0),
+      declare_parameter<double>("cmd_wz_offset", 0.0)};
+    offsets_when_standing_ = declare_parameter<bool>("offsets_when_standing", false);
     use_cmd_vel_ = declare_parameter<bool>("use_cmd_vel", false);
     cmd_vel_timeout_ = declare_parameter<double>("cmd_vel_timeout_s", 0.5);
     // Safety / motion.
@@ -89,6 +107,15 @@ public:
     start_ramp_s_ = declare_parameter<double>("start_ramp_s", 1.0);
     home_pose_ = declare_parameter<std::vector<double>>("home_pose", std::vector<double>{});
     home_max_vel_ = declare_parameter<double>("home_max_vel", 0.3);
+    command_joint_names_ = declare_parameter<std::vector<std::string>>(
+      "command_joints", std::vector<std::string>{});
+    always_commanded_ = declare_parameter<std::vector<std::string>>(
+      "always_commanded_joints", std::vector<std::string>{"waist_yaw_joint"});
+    held_targets_ =
+      declare_parameter<std::vector<double>>("held_joint_targets", std::vector<double>{});
+    pinned_names_ = declare_parameter<std::vector<std::string>>(
+      "obs_pinned_joints", std::vector<std::string>{});
+    detect_offline_ = declare_parameter<bool>("detect_offline", true);
     home_min_duration_ = declare_parameter<double>("home_min_duration_s", 2.0);
     const auto imu_topic = declare_parameter<std::string>("imu_topic", "/imu");
     const auto joint_states_topic =
@@ -127,6 +154,41 @@ public:
     if (!error.empty()) {
       throw std::invalid_argument(error);
     }
+    is_action_.assign(n, false);
+    for (size_t idx : action_index_) {
+      is_action_[idx] = true;
+    }
+    error = check_names(always_commanded_, "always_commanded_joints");
+    if (!error.empty()) {
+      throw std::invalid_argument(error);
+    }
+    if (command_joint_names_.empty()) {
+      command_joint_names_ = action_joint_names_;
+      for (const auto & name : always_commanded_) {
+        if (std::find(command_joint_names_.begin(), command_joint_names_.end(), name) ==
+          command_joint_names_.end())
+        {
+          command_joint_names_.push_back(name);
+        }
+      }
+    }
+    if (held_targets_.empty()) {
+      held_targets_.assign(n, 0.0);
+    }
+    error = check_command_joints(command_joint_names_);
+    if (error.empty() && held_targets_.size() != n) {
+      error = "held_joint_targets must have len(joint_names) entries";
+    }
+    if (error.empty()) {
+      error = check_names(pinned_names_, "obs_pinned_joints");
+    }
+    if (!error.empty()) {
+      throw std::invalid_argument(error);
+    }
+    apply_command_joints(command_joint_names_);
+    manual_pin_ = name_mask(pinned_names_);
+    offline_now_.assign(n, false);
+    session_offline_.assign(n, false);
     obs_builder_ = make_observation_builder(default_joint_pos_, observation_scales_, error);
     if (!obs_builder_) {
       throw std::invalid_argument(error);
@@ -153,9 +215,7 @@ public:
     state_.joint_vel.assign(n, 0.0);
     action_.assign(action_index_.size(), 0.0f);
     obs_.assign(obs_builder_->size(), 0.0f);
-    policy_target_ = default_joint_pos_;
-    command_msg_.name = joint_names_;
-    command_msg_.position.assign(n, 0.0);
+    policy_target_ = rest_targets();
 
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
       imu_topic, rclcpp::SensorDataQoS(),
@@ -214,6 +274,106 @@ private:
   std::string check_home(const std::vector<double> & home) const
   {
     return home.size() == joint_names_.size() ? "" : "home_pose must have len(joint_names) entries";
+  }
+
+  std::string check_names(const std::vector<std::string> & names, const std::string & what) const
+  {
+    for (const auto & name : names) {
+      if (std::find(joint_names_.begin(), joint_names_.end(), name) == joint_names_.end()) {
+        return what + ": unknown joint '" + name + "'";
+      }
+    }
+    return "";
+  }
+
+  std::string check_command_joints(const std::vector<std::string> & names) const
+  {
+    std::string error = check_names(names, "command_joints");
+    if (!error.empty()) {
+      return error;
+    }
+    for (const auto & a : action_joint_names_) {
+      if (std::find(names.begin(), names.end(), a) == names.end()) {
+        return "command_joints must include every action joint (missing " + a + ")";
+      }
+    }
+    for (const auto & a : always_commanded_) {
+      if (std::find(names.begin(), names.end(), a) == names.end()) {
+        return "command_joints must include " + a + " (always_commanded_joints)";
+      }
+    }
+    return "";
+  }
+
+  std::vector<bool> name_mask(const std::vector<std::string> & names) const
+  {
+    std::vector<bool> mask(joint_names_.size(), false);
+    for (size_t i = 0; i < joint_names_.size(); ++i) {
+      mask[i] = std::find(names.begin(), names.end(), joint_names_[i]) != names.end();
+    }
+    return mask;
+  }
+
+  void apply_command_joints(const std::vector<std::string> & names)
+  {
+    command_joint_names_ = names;
+    commanded_ = name_mask(names);
+    command_index_.clear();
+    command_msg_.name.clear();
+    for (size_t i = 0; i < joint_names_.size(); ++i) {
+      if (commanded_[i]) {
+        command_index_.push_back(i);
+        command_msg_.name.push_back(joint_names_[i]);
+      }
+    }
+    command_msg_.position.assign(command_index_.size(), 0.0);
+  }
+
+  // Targets with zero action: legs at the default pose, the rest at their
+  // hold targets.
+  std::vector<double> rest_targets() const
+  {
+    std::vector<double> t(joint_names_.size());
+    for (size_t i = 0; i < t.size(); ++i) {
+      t[i] = is_action_[i] ? default_joint_pos_[i] : held_targets_[i];
+    }
+    return t;
+  }
+
+  bool running() const
+  {
+    return mode_ == Mode::kRamping || mode_ == Mode::kRunning;
+  }
+
+  // Joints whose observation is reported at the hold pose, at rest.
+  std::vector<bool> pinned_mask() const
+  {
+    std::vector<bool> pin(joint_names_.size());
+    for (size_t i = 0; i < pin.size(); ++i) {
+      const bool offline = detect_offline_ && (running() ? session_offline_[i] : offline_now_[i]);
+      pin[i] = manual_pin_[i] || !commanded_[i] || offline;
+    }
+    return pin;
+  }
+
+  std::vector<std::string> names_where(const std::vector<bool> & mask) const
+  {
+    std::vector<std::string> out;
+    for (size_t i = 0; i < mask.size(); ++i) {
+      if (mask[i]) {
+        out.push_back(joint_names_[i]);
+      }
+    }
+    return out;
+  }
+
+  static std::string json_list(const std::vector<std::string> & names)
+  {
+    std::string out = "[";
+    for (const auto & n : names) {
+      out += (out.size() > 1 ? ",\"" : "\"") + n + "\"";
+    }
+    return out + "]";
   }
 
   std::vector<double> expand_action_scale(std::vector<double> scale, std::string & error) const
@@ -277,7 +437,8 @@ private:
   {
     static const std::set<std::string> kReadOnly = {
       "joint_names", "action_joint_names", "observation_terms", "num_obs", "num_threads",
-      "imu_topic", "joint_states_topic", "command_topic", "cmd_vel_topic", "publish_debug"};
+      "imu_topic", "joint_states_topic", "command_topic", "cmd_vel_topic", "publish_debug",
+      "always_commanded_joints"};
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = false;
 
@@ -288,12 +449,19 @@ private:
     auto cmd = cmd_;
     auto cmd_min = cmd_min_;
     auto cmd_max = cmd_max_;
+    auto cmd_offset = cmd_offset_;
+    bool offsets_when_standing = offsets_when_standing_;
     double action_clip = action_clip_, data_timeout = data_timeout_;
     double policy_rate = policy_rate_hz_, command_rate = command_rate_hz_;
     double max_tilt = max_start_tilt_deg_, ramp = start_ramp_s_;
     double home_vel = home_max_vel_, home_min = home_min_duration_;
     double cmd_vel_timeout = cmd_vel_timeout_;
     bool use_cmd_vel = use_cmd_vel_;
+    auto command_joints = command_joint_names_;
+    auto held_targets = held_targets_;
+    auto pinned_names = pinned_names_;
+    bool detect_offline = detect_offline_;
+    bool command_joints_changed = false;
     std::optional<std::string> policy_path;
     bool rebuild_obs = false;
     try {
@@ -347,12 +515,34 @@ private:
           cmd_max[1] = p.as_double();
         } else if (name == "ang_vel_z_max") {
           cmd_max[2] = p.as_double();
+        } else if (name == "cmd_vx_offset") {
+          cmd_offset[0] = p.as_double();
+        } else if (name == "cmd_vy_offset") {
+          cmd_offset[1] = p.as_double();
+        } else if (name == "cmd_wz_offset") {
+          cmd_offset[2] = p.as_double();
+        } else if (name == "offsets_when_standing") {
+          offsets_when_standing = p.as_bool();
         } else if (name == "use_cmd_vel") {
           use_cmd_vel = p.as_bool();
         } else if (name == "cmd_vel_timeout_s") {
           cmd_vel_timeout = p.as_double();
         } else if (name == "policy_path") {
           policy_path = p.as_string();
+        } else if (name == "command_joints") {
+          command_joints = p.as_string_array();
+          result.reason = check_command_joints(command_joints);
+          command_joints_changed = command_joints != command_joint_names_;
+        } else if (name == "held_joint_targets") {
+          held_targets = p.as_double_array();
+          if (held_targets.size() != joint_names_.size()) {
+            result.reason = "held_joint_targets must have len(joint_names) entries";
+          }
+        } else if (name == "obs_pinned_joints") {
+          pinned_names = p.as_string_array();
+          result.reason = check_names(pinned_names, "obs_pinned_joints");
+        } else if (name == "detect_offline") {
+          detect_offline = p.as_bool();
         }
         if (!result.reason.empty()) {
           return result;
@@ -385,6 +575,10 @@ private:
         return result;
       }
     }
+    if (command_joints_changed && running()) {
+      result.reason = "command_joints can only be changed while the policy is stopped";
+      return result;
+    }
     std::unique_ptr<getup::ObservationBuilder> obs_builder;
     if (rebuild_obs) {
       obs_builder = make_observation_builder(default_joint_pos, observation_scales, result.reason);
@@ -409,6 +603,8 @@ private:
     cmd_ = cmd;
     cmd_min_ = cmd_min;
     cmd_max_ = cmd_max;
+    cmd_offset_ = cmd_offset;
+    offsets_when_standing_ = offsets_when_standing;
     action_clip_ = action_clip;
     data_timeout_ = data_timeout;
     max_start_tilt_deg_ = max_tilt;
@@ -417,6 +613,14 @@ private:
     home_min_duration_ = home_min;
     use_cmd_vel_ = use_cmd_vel;
     cmd_vel_timeout_ = cmd_vel_timeout;
+    held_targets_ = std::move(held_targets);
+    pinned_names_ = std::move(pinned_names);
+    manual_pin_ = name_mask(pinned_names_);
+    detect_offline_ = detect_offline;
+    if (command_joints_changed) {
+      apply_command_joints(command_joints);
+      RCLCPP_WARN(get_logger(), "Now commanding %zu joints", command_index_.size());
+    }
     if (obs_builder) {
       default_joint_pos_ = std::move(default_joint_pos);
       observation_scales_ = std::move(observation_scales);
@@ -474,9 +678,19 @@ private:
       last_js_names_ = msg.name;
     }
     const bool has_vel = msg.velocity.size() == msg.name.size();
+    const bool has_eff = msg.effort.size() == msg.name.size();
+    const bool session = running();
     for (size_t i = 0; i < joint_names_.size(); ++i) {
-      state_.joint_pos[i] = msg.position[js_index_[i]];
-      state_.joint_vel[i] = has_vel ? msg.velocity[js_index_[i]] : 0.0;
+      const size_t k = js_index_[i];
+      state_.joint_pos[i] = msg.position[k];
+      state_.joint_vel[i] = has_vel ? msg.velocity[k] : 0.0;
+      // The bridge forwards offline motors as exactly q = dq = tau = 0, which
+      // a live motor practically never reports.
+      offline_now_[i] = has_vel && has_eff && msg.position[k] == 0.0 && msg.velocity[k] == 0.0 &&
+        msg.effort[k] == 0.0;
+      if (session && offline_now_[i]) {
+        session_offline_[i] = true;
+      }
     }
     last_js_ = SteadyClock::now();
   }
@@ -499,14 +713,26 @@ private:
 
   // Velocity command in use: cmd_vel (if enabled and fresh) else the GUI
   // parameters, clamped to the configured limits.
+  // Requested command: cmd_vel (if enabled and fresh) or the GUI parameters.
+  std::array<double, 3> raw_command() const
+  {
+    if (use_cmd_vel_) {
+      return (last_cmd_vel_ && age(last_cmd_vel_) < cmd_vel_timeout_) ?
+             cmd_vel_ : std::array<double, 3>{0.0, 0.0, 0.0};
+    }
+    return cmd_;
+  }
+
+  // Command fed to the policy: requested + calibration offsets (only while
+  // motion is requested, unless offsets_when_standing), clamped to the limits.
   std::array<double, 3> velocity_command() const
   {
-    std::array<double, 3> c = cmd_;
-    if (use_cmd_vel_) {
-      c = (last_cmd_vel_ && age(last_cmd_vel_) < cmd_vel_timeout_) ?
-        cmd_vel_ : std::array<double, 3>{0.0, 0.0, 0.0};
-    }
+    std::array<double, 3> c = raw_command();
+    const bool standing = c[0] == 0.0 && c[1] == 0.0 && c[2] == 0.0;
     for (int k = 0; k < 3; ++k) {
+      if (!standing || offsets_when_standing_) {
+        c[k] += cmd_offset_[k];
+      }
       c[k] = std::clamp(c[k], cmd_min_[k], cmd_max_[k]);
     }
     return c;
@@ -549,6 +775,22 @@ private:
       message = "wait until homing is finished";
     } else if (!data_fresh()) {
       message = "no fresh IMU/JointState data";
+    } else if (detect_offline_ && [this]() {
+        for (size_t idx : action_index_) {
+          if (offline_now_[idx]) {
+            return true;
+          }
+        }
+        return false;
+      }())
+    {
+      std::string legs;
+      for (size_t idx : action_index_) {
+        if (offline_now_[idx]) {
+          legs += (legs.empty() ? "" : ", ") + joint_names_[idx];
+        }
+      }
+      message = "leg motor offline: " + legs;
     } else if (!upright()) {
       char buf[96];
       std::snprintf(
@@ -557,7 +799,8 @@ private:
       message = buf;
     } else {
       std::fill(action_.begin(), action_.end(), 0.0f);
-      policy_target_ = default_joint_pos_;
+      policy_target_ = rest_targets();
+      session_offline_ = offline_now_;
       move_from_ = current_pose();
       move_start_ = SteadyClock::now();
       mode_ = start_ramp_s_ > 0.0 ? Mode::kRamping : Mode::kRunning;
@@ -612,11 +855,19 @@ private:
       return;
     }
     state_.command = velocity_command();
+    obs_state_ = state_;
+    const auto pin = pinned_mask();
+    for (size_t i = 0; i < pin.size(); ++i) {
+      if (pin[i]) {
+        obs_state_.joint_pos[i] = is_action_[i] ? default_joint_pos_[i] : held_targets_[i];
+        obs_state_.joint_vel[i] = 0.0;
+      }
+    }
     const auto t0 = SteadyClock::now();
-    obs_builder_->build(state_, action_, obs_);
+    obs_builder_->build(obs_state_, action_, obs_);
     const auto & out = policy_->infer(obs_);
     inference_ms_ = std::chrono::duration<double, std::milli>(SteadyClock::now() - t0).count();
-    auto target = default_joint_pos_;
+    auto target = rest_targets();
     for (size_t k = 0; k < action_.size(); ++k) {
       float a = out[k];
       if (action_clip_ > 0.0) {
@@ -669,8 +920,8 @@ private:
     if (!target_) {
       return;
     }
-    for (size_t i = 0; i < joint_names_.size(); ++i) {
-      command_msg_.position[i] = (*target_)[i];
+    for (size_t k = 0; k < command_index_.size(); ++k) {
+      command_msg_.position[k] = (*target_)[command_index_[k]];
     }
     command_msg_.header.stamp = this->now();
     command_pub_->publish(command_msg_);
@@ -697,8 +948,19 @@ private:
       max_start_tilt_deg_, data_fresh() ? "true" : "false", age(last_imu_), age(last_js_),
       inference_ms_, policy_ ? "true" : "false", path.c_str(), c[0], c[1], c[2],
       use_cmd_vel_ ? (cmd_vel_live ? "cmd_vel" : "cmd_vel (stale: 0)") : "gui");
+    std::string json = buf;
+    json.pop_back();
+    const auto raw = raw_command();
+    char extra[160];
+    std::snprintf(
+      extra, sizeof(extra), ",\"command_raw\":[%.3f,%.3f,%.3f],\"command_offset\":[%.3f,%.3f,%.3f]",
+      raw[0], raw[1], raw[2], cmd_offset_[0], cmd_offset_[1], cmd_offset_[2]);
+    json += extra;
+    json += ",\"command_joints\":" + json_list(command_joint_names_) +
+      ",\"pinned_joints\":" + json_list(names_where(pinned_mask())) +
+      ",\"offline_detected\":" + json_list(names_where(offline_now_)) + "}";
     std_msgs::msg::String msg;
-    msg.data = buf;
+    msg.data = json;
     status_pub_->publish(msg);
   }
 
@@ -719,11 +981,18 @@ private:
   std::array<double, 3> cmd_{0.0, 0.0, 0.0};
   std::array<double, 3> cmd_min_{-1.0, -1.0, -0.5};
   std::array<double, 3> cmd_max_{1.0, 1.0, 0.5};
+  std::array<double, 3> cmd_offset_{0.0, 0.0, 0.0};
+  bool offsets_when_standing_{false};
   bool use_cmd_vel_{false};
   double cmd_vel_timeout_{0.5};
   double max_start_tilt_deg_{30.0};
   double start_ramp_s_{1.0};
   std::vector<double> home_pose_;
+  std::vector<std::string> command_joint_names_;
+  std::vector<std::string> always_commanded_;
+  std::vector<double> held_targets_;
+  std::vector<std::string> pinned_names_;
+  bool detect_offline_{true};
   double home_max_vel_{0.3};
   double home_min_duration_{2.0};
 
@@ -742,6 +1011,13 @@ private:
   double tilt_deg_{180.0};
   Mode mode_{Mode::kIdle};
   getup::RobotState state_;
+  getup::RobotState obs_state_;  // state_ with pinned joints replaced
+  std::vector<bool> is_action_;
+  std::vector<bool> commanded_;
+  std::vector<size_t> command_index_;
+  std::vector<bool> manual_pin_;
+  std::vector<bool> offline_now_;
+  std::vector<bool> session_offline_;
   std::vector<std::string> last_js_names_;
   std::vector<size_t> js_index_;
   std::optional<SteadyClock::time_point> last_imu_;

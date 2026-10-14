@@ -31,7 +31,18 @@ POLICY_SPECS = [
     _num("ang_vel_z_min", "wz min", "rad/s", -3.0, 0.0, 0.05),
     _num("ang_vel_z_max", "wz max", "rad/s", 0.0, 3.0, 0.05),
     {"name": "use_cmd_vel", "label": "Take command from cmd_vel topic", "unit": "", "type": "bool"},
+    {"name": "detect_offline", "label": "Pin obs of motors detected offline", "unit": "",
+     "type": "bool"},
     _num("cmd_vel_timeout_s", "cmd_vel timeout (falls back to 0)", "s", 0.05, 5.0, 0.05),
+]
+
+# Velocity-command calibration (shown in the command panel).
+OFFSET_SPECS = [
+    _num("cmd_vx_offset", "vx offset", "m/s", -0.5, 0.5, 0.01),
+    _num("cmd_vy_offset", "vy offset", "m/s", -0.5, 0.5, 0.01),
+    _num("cmd_wz_offset", "wz offset", "rad/s", -0.5, 0.5, 0.01),
+    {"name": "offsets_when_standing", "label": "Apply offsets with a zero command", "unit": "",
+     "type": "bool"},
 ]
 
 # Scalar parameters of getup's g1_lowlevel_bridge.
@@ -48,6 +59,8 @@ JOINT_COLUMNS = [
      "step": 0.001, "index_by": "joint_names"},
     {"node": "policy", "name": "home_pose", "label": "Home pose", "unit": "rad",
      "step": 0.01, "index_by": "joint_names"},
+    {"node": "policy", "name": "held_joint_targets", "label": "Hold target", "unit": "rad",
+     "step": 0.01, "index_by": "joint_names"},
     {"node": "policy", "name": "action_scale", "label": "Action scale", "unit": "",
      "step": 0.01, "index_by": "action_joint_names"},
     {"node": "bridge", "name": "kp", "label": "Kp", "unit": "N·m/rad", "step": 0.1,
@@ -61,8 +74,16 @@ JOINT_COLUMNS = [
 ]
 
 COMMAND_PARAMS = ["cmd_vx", "cmd_vy", "cmd_wz"]
+# Joint-name lists shown as checkbox columns of the joint table.
+JOINT_FLAGS = [
+    {"name": "command_joints", "label": "Commanded",
+     "title": "Published to the bridge (others are damped). Only while the policy is stopped."},
+    {"name": "obs_pinned_joints", "label": "Pin obs",
+     "title": "Report this joint at its hold target, at rest, in the observation."},
+]
 POLICY_EXTRA = ["joint_names", "action_joint_names", "observation_terms", "observation_scales",
-                "policy_path"] + COMMAND_PARAMS
+                "policy_path", "always_commanded_joints"] + COMMAND_PARAMS + [
+                    f["name"] for f in JOINT_FLAGS]
 BRIDGE_EXTRA = ["joint_names", "enable_lowcmd"]
 
 TYPE_MAP = {
@@ -70,12 +91,13 @@ TYPE_MAP = {
     "bool": (Parameter.Type.BOOL, bool),
     "string": (Parameter.Type.STRING, str),
     "double_array": (Parameter.Type.DOUBLE_ARRAY, lambda v: [float(x) for x in v]),
+    "string_array": (Parameter.Type.STRING_ARRAY, lambda v: [str(x) for x in v]),
 }
 
 
 def _param_types():
     types = {"policy": {}, "bridge": {}}
-    for spec in POLICY_SPECS:
+    for spec in POLICY_SPECS + OFFSET_SPECS:
         types["policy"][spec["name"]] = spec["type"]
     for spec in BRIDGE_SPECS:
         types["bridge"][spec["name"]] = spec["type"]
@@ -83,6 +105,8 @@ def _param_types():
         types[col["node"]][col["name"]] = "double_array"
     for name in COMMAND_PARAMS:
         types["policy"][name] = "double"
+    for flag in JOINT_FLAGS:
+        types["policy"][flag["name"]] = "string_array"
     types["policy"]["observation_scales"] = "double_array"
     types["policy"]["policy_path"] = "string"
     types["bridge"]["enable_lowcmd"] = "bool"
@@ -123,8 +147,9 @@ class PpowalkGuiBridge(Node):
 
     def config(self):
         return {"policy_node": self._targets["policy"], "bridge_node": self._targets["bridge"],
-                "policy_specs": POLICY_SPECS, "bridge_specs": BRIDGE_SPECS,
-                "joint_columns": JOINT_COLUMNS}
+                "policy_specs": POLICY_SPECS, "offset_specs": OFFSET_SPECS,
+                "bridge_specs": BRIDGE_SPECS,
+                "joint_columns": JOINT_COLUMNS, "joint_flags": JOINT_FLAGS}
 
     def status_snapshot(self):
         now = time.monotonic()
@@ -167,7 +192,7 @@ class PpowalkGuiBridge(Node):
 
     def _read_all(self):
         names = {
-            "policy": [s["name"] for s in POLICY_SPECS] + POLICY_EXTRA + [
+            "policy": [s["name"] for s in POLICY_SPECS + OFFSET_SPECS] + POLICY_EXTRA + [
                 c["name"] for c in JOINT_COLUMNS if c["node"] == "policy"],
             "bridge": [s["name"] for s in BRIDGE_SPECS] + BRIDGE_EXTRA + [
                 c["name"] for c in JOINT_COLUMNS if c["node"] == "bridge"],

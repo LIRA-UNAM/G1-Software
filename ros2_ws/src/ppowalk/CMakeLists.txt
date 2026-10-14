@@ -26,6 +26,8 @@ set(CMAKE_INSTALL_RPATH "${getup_DIR}/../../../lib")
 
 add_executable(ppowalk_policy_node src/ppowalk_policy_node.cpp)
 target_include_directories(ppowalk_policy_node PRIVATE include)
+# Third-party headers (ONNX Runtime) as system includes: no -Wpedantic noise.
+target_include_directories(ppowalk_policy_node SYSTEM PRIVATE ${getup_INCLUDE_DIRS})
 ament_target_dependencies(ppowalk_policy_node
   rclcpp geometry_msgs sensor_msgs std_msgs std_srvs getup)
 
@@ -36,6 +38,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_motion test/test_motion.cpp)
   target_include_directories(test_motion PRIVATE include)
+  target_include_directories(test_motion SYSTEM PRIVATE ${getup_INCLUDE_DIRS})
   ament_target_dependencies(test_motion getup)
 endif()
 

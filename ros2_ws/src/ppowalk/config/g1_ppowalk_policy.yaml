@@ -49,8 +49,8 @@ ppowalk_policy_node:
       - right_ankle_pitch_joint
       - right_ankle_roll_joint
 
-    # KNEES_BENT_KEYFRAME: joint_pos obs = q - default, and the action offset.
-    # Waist and arms are held here while the policy runs.
+    # KNEES_BENT_KEYFRAME: joint_pos obs = q - default, and the action offset
+    # of the leg joints. (Waist and arms are NOT held here: see held_joint_targets.)
     default_joint_pos: [
       -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,    # left leg
       -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,    # right leg
@@ -78,12 +78,21 @@ ppowalk_policy_node:
     cmd_vx: 0.0
     cmd_vy: 0.0
     cmd_wz: 0.0
-    lin_vel_x_min: -1.0
-    lin_vel_x_max: 1.0
-    lin_vel_y_min: -1.0
-    lin_vel_y_max: 1.0
-    ang_vel_z_min: -0.5
-    ang_vel_z_max: 0.5
+    lin_vel_x_min: -0.7
+    lin_vel_x_max: 0.7
+    lin_vel_y_min: -0.7
+    lin_vel_y_max: 0.7
+    ang_vel_z_min: -0.7
+    ang_vel_z_max: 0.7
+    # Calibration offsets added to the command (GUI or cmd_vel) to cancel the
+    # real robot's drift, e.g. a negative cmd_vy_offset if it walks slightly
+    # left with vy = 0. Applied only while motion is commanded (a zero command
+    # means "stand still" in training) unless offsets_when_standing. The sum is
+    # clamped to the limits above.
+    cmd_vx_offset: 0.0
+    cmd_vy_offset: 0.0
+    cmd_wz_offset: 0.0
+    offsets_when_standing: false
     # Optionally take the command from geometry_msgs/Twist (e.g. a joystick);
     # if those messages stop for cmd_vel_timeout_s the command falls back to 0.
     use_cmd_vel: false
@@ -91,11 +100,56 @@ ppowalk_policy_node:
     cmd_vel_timeout_s: 0.5
 
     # Start is only allowed while the IMU tilt is at most this (degrees).
-    max_start_tilt_deg: 30.0
+    max_start_tilt_deg: 20.0
     # After Start, blend from the current pose into the policy targets.
     start_ramp_s: 1.0
 
-    # Home button: slow cosine move to home_pose (zero pose by default).
+    # Joints published to the bridge; the bridge damps all others. Must include
+    # every action joint and every always_commanded_joints entry. Default: legs
+    # + waist. Also commanding the healthy arm (held at held_joint_targets)
+    # tracked velocity better in simulation (0.46 vs 0.33 m/s for a 0.5 m/s
+    # command); offline motors are kept passive by the bridge either way.
+    command_joints:
+      - left_hip_pitch_joint
+      - left_hip_roll_joint
+      - left_hip_yaw_joint
+      - left_knee_joint
+      - left_ankle_pitch_joint
+      - left_ankle_roll_joint
+      - right_hip_pitch_joint
+      - right_hip_roll_joint
+      - right_hip_yaw_joint
+      - right_knee_joint
+      - right_ankle_pitch_joint
+      - right_ankle_roll_joint
+      - waist_yaw_joint
+
+    # Never removable from command_joints: the waist stays stiff at its hold
+    # target (0, as in training) whenever this node commands the robot.
+    always_commanded_joints: [waist_yaw_joint]
+
+    # Targets of commanded joints the policy does not drive. The training env
+    # holds waist and arms at 0 (straight arms), not at default_joint_pos.
+    held_joint_targets: [
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      0.0,
+      0.0, 0.0, 0.0, 0.0, 0.0,
+      0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # Observation pinning: these joints' joint_pos/joint_vel observation is
+    # reported at their hold target, at rest (as in training), instead of the
+    # measurement. Applied automatically to every non-commanded joint and, with
+    # detect_offline, to every motor seen offline (exactly q = dq = tau = 0;
+    # latched for the whole run so a flapping motor cannot leak through).
+    # Start is refused while a leg motor is offline.
+    # Extra joints to pin manually go in obs_pinned_joints (string list, e.g.
+    # [right_elbow_joint]); it is left out here because ROS 2 cannot type an
+    # empty YAML list. The GUI's "Pin obs" column edits it live.
+    detect_offline: true
+
+    # Home button: slow cosine move of the commanded joints to home_pose
+    # (zero pose by default).
     home_pose: [
       0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
       0.0, 0.0, 0.0, 0.0, 0.0, 0.0,

@@ -36,7 +36,9 @@
     <div><span>Step</span><b id="policy-step">&mdash;</b></div>
     <div><span>Inference</span><b id="inference">&mdash;</b></div>
     <div><span>Command in use</span><b id="command-live">&mdash;</b></div>
-    <div><span>Offline motors</span><b id="offline" class="path">&mdash;</b></div>
+    <div><span>Offline motors (bridge)</span><b id="offline" class="path">&mdash;</b></div>
+    <div class="wide"><span>Commanded joints</span><b id="commanded" class="path">&mdash;</b></div>
+    <div class="wide"><span>Pinned observations</span><b id="pinned" class="path">&mdash;</b></div>
     <div class="wide"><span>Model</span><b id="model-path" class="path">&mdash;</b></div>
   </div>
   <div class="controls big">
@@ -57,6 +59,10 @@
     </div>
     <div id="command" class="params"></div>
     <p class="hint">Sent to the policy while it runs (cmd_vx / cmd_vy / cmd_wz). Slider ranges follow the limits in the policy panel.</p>
+    <h3>Calibration offsets</h3>
+    <div id="params-offsets" class="params"></div>
+    <p class="hint">Added to the command to cancel the robot's drift (e.g. a negative vy offset if it walks slightly left when going straight). Applied only while motion is commanded unless the checkbox is set; the sum is clamped to the limits.</p>
+    <p class="hint">Sent to the policy: <b id="command-effective">&mdash;</b></p>
   </section>
 
   <section class="panel panel-policy">

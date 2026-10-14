@@ -504,3 +504,13 @@ select {
 input[type="range"] {
   width: 100%;
 }
+
+td.col-flag,
+thead td.col-flag {
+  text-align: center;
+  border-left: 3px solid rgba(8, 145, 178, 0.5);
+}
+
+td.col-flag input {
+  width: auto;
+}

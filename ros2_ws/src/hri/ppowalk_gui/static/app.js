@@ -50,6 +50,7 @@
       document.getElementById("policy-node").textContent = message.config.policy_node;
       document.getElementById("bridge-node").textContent = message.config.bridge_node;
       buildScalarForm("policy", message.config.policy_specs);
+      buildScalarForm("policy", message.config.offset_specs, "params-offsets");
       buildScalarForm("bridge", message.config.bridge_specs);
       readParameters();
     } else if (message.type === "status") {
@@ -137,9 +138,16 @@
       policy.online && policy.step ? `${policy.inference_ms.toFixed(2)} ms` : "—";
     document.getElementById("command-live").textContent = !policy.online ? "—"
       : `${policy.command.map((v) => v.toFixed(2)).join(", ")} (${policy.command_source})`;
+    document.getElementById("command-effective").textContent = !policy.online || !policy.command_raw ? "—"
+      : `requested (${policy.command_raw.map((v) => v.toFixed(2)).join(", ")}) + offset (` +
+        `${policy.command_offset.map((v) => v.toFixed(2)).join(", ")}) → (${policy.command.map((v) => v.toFixed(2)).join(", ")})`;
     const offline = bridge.online ? (bridge.offline_joints || []) : [];
     document.getElementById("offline").textContent = !bridge.online ? "—"
       : offline.length ? offline.map((n) => n.replace(/_joint$/, "")).join(", ") : "none";
+    const short = (list) => (list || []).map((n) => n.replace(/_joint$/, "")).join(", ") || "none";
+    document.getElementById("commanded").textContent = !policy.online ? "—"
+      : `${(policy.command_joints || []).length} — ${short(policy.command_joints)}`;
+    document.getElementById("pinned").textContent = !policy.online ? "—" : short(policy.pinned_joints);
     document.getElementById("model-path").textContent =
       !policy.online ? "—" : policy.policy_loaded ? policy.policy_path : "none loaded";
 
@@ -150,6 +158,8 @@
     else {
       if (!policy.policy_loaded) reasons.push("no model loaded");
       if (!policy.data_fresh) reasons.push("no fresh IMU / joint data");
+      const legsOffline = (policy.offline_detected || []).filter((n) => /_(hip|knee|ankle)_/.test(n));
+      if (legsOffline.length) reasons.push(`leg motor offline: ${legsOffline.join(", ")}`);
       if (!policy.upright) reasons.push(`robot not upright (tilt ${policy.tilt_deg.toFixed(0)}° > ${policy.max_start_tilt_deg.toFixed(0)}°)`);
       if (!idle) reasons.push(`policy is ${mode}`);
     }
@@ -222,8 +232,8 @@
     return `${node}.${name}`;
   }
 
-  function buildScalarForm(node, specs) {
-    const container = document.getElementById(`params-${node}`);
+  function buildScalarForm(node, specs, containerId) {
+    const container = document.getElementById(containerId || `params-${node}`);
     container.innerHTML = "";
     for (const spec of specs) {
       const row = document.createElement("div");
@@ -278,6 +288,12 @@
     const head = table.createTHead().insertRow();
     head.insertCell().textContent = "#";
     head.insertCell().textContent = "Joint";
+    for (const flag of state.config.joint_flags || []) {
+      const th = head.insertCell();
+      th.textContent = flag.label;
+      th.title = flag.title;
+      th.className = "col-flag";
+    }
     for (const col of state.config.joint_columns) {
       const th = head.insertCell();
       th.textContent = col.unit ? `${col.label} (${col.unit})` : col.label;
@@ -288,6 +304,22 @@
       const tr = body.insertRow();
       tr.insertCell().textContent = row;
       tr.insertCell().textContent = joint.replace(/_joint$/, "");
+      for (const flag of state.config.joint_flags || []) {
+        const td = tr.insertCell();
+        td.className = "col-flag";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        const list = policy[flag.name] || [];
+        box.checked = list.includes(joint);
+        const locked = (policy.action_joint_names || []).includes(joint) ||
+          (policy.always_commanded_joints || []).includes(joint);
+        if (flag.name === "command_joints" && locked) {
+          box.disabled = true;  // legs and always-commanded joints (waist)
+          box.title = "always commanded";
+        }
+        box.addEventListener("change", () => toggleJointFlag(flag.name, joint, box.checked));
+        td.appendChild(box);
+      }
       for (const col of state.config.joint_columns) {
         const td = tr.insertCell();
         td.className = `col-${col.node}`;
@@ -311,6 +343,17 @@
         td.appendChild(input);
       }
     });
+  }
+
+  async function toggleJointFlag(name, joint, on) {
+    const current = (state.values.policy[name] || []).slice();
+    const names = state.values.policy.joint_names || [];
+    const set = new Set(current);
+    if (on) set.add(joint); else set.delete(joint);
+    // Keep joint-table order.
+    const next = names.filter((n) => set.has(n));
+    const result = await apply("policy", name, next);
+    if (!result) showValues();  // rejected: restore the checkboxes
   }
 
   function editArrayElement(node, name, index, input) {
@@ -369,7 +412,9 @@
 
   function showValues() {
     for (const node of ["policy", "bridge"]) {
-      for (const spec of state.config[`${node}_specs`]) {
+      const specs = node === "policy"
+        ? state.config.policy_specs.concat(state.config.offset_specs || []) : state.config.bridge_specs;
+      for (const spec of specs) {
         if (state.dirty[key(node, spec.name)]) continue;
         const input = document.getElementById(`param_${node}_${spec.name}`);
         const value = state.values[node][spec.name];
