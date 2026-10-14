@@ -86,3 +86,24 @@ TEST(ObservationBuilder, RejectsUnknownTerm)
 {
   EXPECT_THROW(getup::ObservationBuilder({"base_lin_vel"}, {0.0}), std::invalid_argument);
 }
+
+TEST(ObservationBuilder, VelocityTaskLayout)
+{
+  // 2 joints, 1 action, plus the velocity command (mjlab velocity task order).
+  getup::ObservationBuilder builder(
+    {"base_ang_vel", "projected_gravity", "joint_pos", "joint_vel", "actions", "command"},
+    {0.1, -0.2}, {}, 1);
+  ASSERT_EQ(builder.size(), 3u + 3u + 2u + 2u + 1u + 3u);
+  ASSERT_EQ(builder.num_actions(), 1u);
+  getup::RobotState state;
+  state.joint_pos = {0.1, -0.2};
+  state.joint_vel = {0.0, 0.0};
+  state.command = {0.5, -0.25, 0.3};
+  std::vector<float> obs;
+  builder.build(state, {0.7f}, obs);
+  EXPECT_FLOAT_EQ(obs[10], 0.7f);
+  EXPECT_FLOAT_EQ(obs[11], 0.5f);
+  EXPECT_FLOAT_EQ(obs[12], -0.25f);
+  EXPECT_FLOAT_EQ(obs[13], 0.3f);
+  EXPECT_THROW(builder.build(state, {0.7f, 0.1f}, obs), std::invalid_argument);
+}

@@ -9,7 +9,8 @@
 //
 // LowCmd is streamed at a fixed rate with per-joint Kp/Kd from parameters.
 // If no fresh joint command is available the motors are put in damping mode
-// (kp = 0, kd = damping_kd). Nothing is sent on /lowcmd unless the
+// (kp = 0, kd = damping_kd); joints missing from a partial command (e.g. a
+// legs-only policy) are damped the same way. Nothing is sent on /lowcmd unless the
 // `enable_lowcmd` parameter is true (can be toggled at runtime with
 // `ros2 param set`). The robot must be in debug mode (high-level motion
 // control released) before enabling it.
@@ -113,6 +114,7 @@ public:
 
     q_.assign(n, 0.0);
     target_.assign(n, 0.0);
+    commanded_.assign(n, false);
     online_.assign(n, false);
     seen_offline_.assign(n, true);
     passive_.assign(n, true);
@@ -361,7 +363,8 @@ private:
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000, "Command name/position mismatch");
       return;
     }
-    // A command must cover every bridged joint; otherwise it is ignored.
+    // A command may cover a subset of the bridged joints (e.g. legs only):
+    // joints missing from the latest command get damping only.
     std::vector<double> target(joint_names_.size(), 0.0);
     std::vector<bool> seen(joint_names_.size(), false);
     for (size_t k = 0; k < msg.name.size(); ++k) {
@@ -371,12 +374,13 @@ private:
         seen[it->second] = true;
       }
     }
-    if (std::find(seen.begin(), seen.end(), false) != seen.end()) {
+    if (std::find(seen.begin(), seen.end(), true) == seen.end()) {
       RCLCPP_ERROR_THROTTLE(
-        get_logger(), *get_clock(), 2000, "Command does not contain all bridged joints");
+        get_logger(), *get_clock(), 2000, "Command contains none of the bridged joints");
       return;
     }
     target_ = std::move(target);
+    commanded_ = std::move(seen);
     last_command_ = SteadyClock::now();
   }
 
@@ -450,7 +454,7 @@ private:
     for (size_t i = 0; i < joint_names_.size(); ++i) {
       auto & m = lowcmd_.motor_cmd[motor_index_[i]];
       m.mode = 1;
-      if (tracking_ && !passive_[i]) {
+      if (tracking_ && commanded_[i] && !passive_[i]) {
         double q = target_[i];
         if (max_target_delta_ > 0.0) {
           q = std::clamp(q, q_[i] - max_target_delta_, q_[i] + max_target_delta_);
@@ -539,6 +543,7 @@ private:
   std::vector<bool> online_;  // motor reports voltage and no offline flag
   std::vector<bool> seen_offline_;  // offline at any sample since the last status
   std::vector<bool> passive_;  // excluded from the current tracking session
+  std::vector<bool> commanded_;  // joints present in the latest command
   std::vector<double> q_;
   std::vector<double> target_;
   uint8_t mode_machine_{0};

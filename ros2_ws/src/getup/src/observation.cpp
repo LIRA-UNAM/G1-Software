@@ -16,10 +16,11 @@ std::array<double, 3> projected_gravity(double w, double x, double y, double z)
 
 ObservationBuilder::ObservationBuilder(
   std::vector<std::string> terms, std::vector<double> default_joint_pos,
-  std::vector<double> term_scales)
+  std::vector<double> term_scales, size_t num_actions)
 : terms_(std::move(terms)),
   default_joint_pos_(std::move(default_joint_pos)),
-  term_scales_(std::move(term_scales))
+  term_scales_(std::move(term_scales)),
+  num_actions_(num_actions > 0 ? num_actions : default_joint_pos_.size())
 {
   if (term_scales_.empty()) {
     term_scales_.assign(terms_.size(), 1.0);
@@ -34,11 +35,14 @@ ObservationBuilder::ObservationBuilder(
 
 size_t ObservationBuilder::term_size(const std::string & term) const
 {
-  if (term == "base_ang_vel" || term == "projected_gravity") {
+  if (term == "base_ang_vel" || term == "projected_gravity" || term == "command") {
     return 3;
   }
-  if (term == "joint_pos" || term == "joint_vel" || term == "actions") {
+  if (term == "joint_pos" || term == "joint_vel") {
     return default_joint_pos_.size();
+  }
+  if (term == "actions") {
+    return num_actions_;
   }
   throw std::invalid_argument("Unsupported observation term: " + term);
 }
@@ -48,8 +52,11 @@ void ObservationBuilder::build(
   std::vector<float> & obs) const
 {
   const size_t n = default_joint_pos_.size();
-  if (state.joint_pos.size() != n || state.joint_vel.size() != n || last_action.size() != n) {
-    throw std::invalid_argument("joint state / action size does not match default_joint_pos");
+  if (state.joint_pos.size() != n || state.joint_vel.size() != n) {
+    throw std::invalid_argument("joint state size does not match default_joint_pos");
+  }
+  if (last_action.size() != num_actions_) {
+    throw std::invalid_argument("last action size does not match num_actions");
   }
   obs.resize(size_);
   size_t k = 0;
@@ -74,8 +81,12 @@ void ObservationBuilder::build(
         obs[k++] = static_cast<float>(s * state.joint_vel[i]);
       }
     } else if (term == "actions") {
-      for (size_t i = 0; i < n; ++i) {
+      for (size_t i = 0; i < num_actions_; ++i) {
         obs[k++] = static_cast<float>(s * last_action[i]);
+      }
+    } else if (term == "command") {
+      for (double v : state.command) {
+        obs[k++] = static_cast<float>(s * v);
       }
     }
   }
