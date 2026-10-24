@@ -1,10 +1,20 @@
 (function () {
   const APPLY_DEBOUNCE_MS = 400;
-  const COMMAND_DEBOUNCE_MS = 120;
+  const COMMAND_INTERVAL_MS = 120;  // max command rate while a joystick moves
+  const STICK_DEADZONE = 0.05;  // stick deflection below which the command is exactly 0
   const AXES = [
     { key: "vx", param: "cmd_vx", label: "Forward vx", unit: "m/s", min: "lin_vel_x_min", max: "lin_vel_x_max" },
     { key: "vy", param: "cmd_vy", label: "Lateral vy", unit: "m/s", min: "lin_vel_y_min", max: "lin_vel_y_max" },
     { key: "wz", param: "cmd_wz", label: "Yaw rate wz", unit: "rad/s", min: "ang_vel_z_min", max: "ang_vel_z_max" },
+  ];
+
+  // Joysticks: stick deflection u (right) / v (up) in [-1, 1] per command axis.
+  // Up is forward; left is +vy / +wz (ROS: y to the left, z up).
+  const PADS = [
+    { label: "Linear velocity", hint: "up: forward · left: sideways left", unit: "m/s", track: false,
+      axes: [{ key: "vx", stick: "v", sign: 1 }, { key: "vy", stick: "u", sign: -1 }] },
+    { label: "Yaw rate", hint: "left: turn left", unit: "rad/s", track: true,
+      axes: [{ key: "wz", stick: "u", sign: -1 }] },
   ];
 
   const state = {
@@ -18,15 +28,21 @@
     status: null,
     command: { vx: 0, vy: 0, wz: 0 },
     commandTimer: null,
+    commandInFlight: false,
+    commandQueued: null,  // { force, label } of a send requested while one was in flight
+    lastSent: null,  // JSON of the last command sent
+    lastSendAt: 0,
+    pads: [],  // joysticks, see makePad()
     source: null,  // velocity command source: "remote", "gui" or "cmd_vel"
     sourceHoldUntil: 0,  // ignore the status source briefly after switching it
     remoteEvents: null,
+    modelsKey: "",
   };
 
   const SOURCE_HINTS = {
-    gui: "Sent to the policy while it runs (cmd_vx / cmd_vy / cmd_wz). Slider ranges follow the limits in the policy panel.",
-    remote: "The remote's sticks command the velocity (see Remote controller below); the sliders are inactive.",
-    cmd_vel: "The command comes from geometry_msgs/Twist on /cmd_vel; the sliders are inactive.",
+    gui: "Sent to the policy while it runs (cmd_vx / cmd_vy / cmd_wz). Drag a joystick to command, release to stop; full deflection reaches the limits in the policy panel.",
+    remote: "The remote's sticks command the velocity (see Remote controller below); the joysticks are inactive.",
+    cmd_vel: "The command comes from geometry_msgs/Twist on /cmd_vel; the joysticks are inactive.",
   };
 
   // ---------------------------------------------------------------- transport
@@ -187,7 +203,7 @@
     document.getElementById("home").disabled = !policy.online || !policy.data_fresh;
     document.getElementById("stop").disabled = !policy.online || mode === "IDLE";
     document.getElementById("release").disabled = !policy.online || mode === "IDLE";
-    document.getElementById("policy-reload").disabled = !policy.online || !idle;
+    renderModels(policy, idle);
     const toggle = document.getElementById("motor-toggle");
     toggle.textContent = bridge.enable_lowcmd ? "Disable motor output" : "Enable motor output";
     toggle.disabled = !bridge.online;
@@ -218,13 +234,54 @@
     }
   }
 
+  // Model dropdown: the *.onnx files of the node's models_dir. Not rebuilt while
+  // it is open (focused).
+  function renderModels(policy, idle) {
+    const select = document.getElementById("policy-select");
+    const dir = policy.models_dir || "";
+    const models = policy.online ? (policy.models || []) : [];
+    const current = policy.online && policy.policy_loaded ? policy.policy_path : "";
+    const key = JSON.stringify([dir, models, current]);
+    if (key !== state.modelsKey && document.activeElement !== select) {
+      state.modelsKey = key;
+      select.innerHTML = "";
+      const paths = models.map((name) => `${dir}/${name}`);
+      if (!current) {
+        const none = new Option("(no model loaded)", "");
+        none.disabled = true;
+        select.add(none);
+      } else if (!paths.includes(current)) {
+        select.add(new Option(`${current} (outside the folder)`, current));
+      }
+      models.forEach((name, i) => select.add(new Option(name, paths[i])));
+      select.value = current;
+    }
+    // While running, a model can be chosen only at a standstill (switch_ok);
+    // the node checks again and refuses otherwise. Not toggled while the
+    // dropdown is open, so a flickering standstill cannot close it.
+    const running = policy.online && (policy.mode === "RUNNING" || policy.mode === "RAMPING");
+    const blocked = running && !policy.switch_ok;
+    if (document.activeElement !== select) select.disabled = !policy.online || !(idle || (running && !blocked));
+    const hint = document.getElementById("models-hint");
+    hint.classList.toggle("blocked", blocked);
+    hint.textContent = !policy.online ? ""
+      : policy.models_error ? `Cannot read ${dir}: ${policy.models_error}`
+      : `${models.length} model${models.length === 1 ? "" : "s"} in ${dir}. ` + (
+        blocked ? `Switch blocked: ${policy.switch_reason || "robot not at a standstill"}. Switching ` +
+          "while running needs a zero velocity command and the robot at rest. "
+        : running ? "Robot at a standstill: choosing one switches the running policy to it now " +
+          "(it blends in over the start ramp). "
+        : "Choosing one loads it right away; the next Start uses it. ") +
+        "A model with the wrong input/output size is rejected and the current one stays loaded.";
+  }
+
   // ---------------------------------------------------------- velocity command
 
   function setSource(src) {
     state.source = src;
     for (const radio of document.querySelectorAll('input[name="source"]')) radio.checked = radio.value === src;
     const gui = src === "gui";
-    for (const input of document.querySelectorAll("#command input")) input.disabled = !gui;
+    for (const pad of state.pads) pad.setEnabled(gui);
     document.getElementById("zero").disabled = !gui;
     document.getElementById("command-hint").textContent = SOURCE_HINTS[src] || "";
   }
@@ -245,50 +302,168 @@
     }
   }
 
-  function buildCommandForm() {
-    const container = document.getElementById("command");
-    container.innerHTML = "";
+  function axisLimits(key) {
+    const axis = AXES.find((a) => a.key === key);
     const p = state.values.policy;
-    for (const axis of AXES) {
-      const lo = p[axis.min] ?? -1, hi = p[axis.max] ?? 1;
+    return [p[axis.min] ?? -1, p[axis.max] ?? 1];
+  }
+
+  // Full deflection reaches the limit on each side (the limits may be asymmetric).
+  function stickToVelocity(key, s) {
+    const [lo, hi] = axisLimits(key);
+    const v = s >= 0 ? s * Math.max(hi, 0) : -s * Math.min(lo, 0);
+    return Math.round(v * 100) / 100;
+  }
+
+  function velocityToStick(key, v) {
+    const [lo, hi] = axisLimits(key);
+    const s = v >= 0 ? (hi > 0 ? v / hi : 0) : (lo < 0 ? -v / lo : 0);
+    return Math.max(-1, Math.min(1, s));
+  }
+
+  // Spring-loaded joystick: dragging commands its axes, releasing snaps the knob
+  // back to the center and sends 0 right away.
+  function makePad(spec) {
+    const root = document.createElement("div");
+    root.className = "joystick";
+    const title = document.createElement("label");
+    title.textContent = spec.label;
+    const pad = document.createElement("div");
+    pad.className = spec.track ? "pad track" : "pad";
+    const knob = document.createElement("div");
+    knob.className = "knob";
+    pad.appendChild(knob);
+    const readout = document.createElement("b");
+    readout.className = "pad-readout";
+    const hint = document.createElement("small");
+    hint.textContent = spec.hint;
+    root.append(title, pad, readout, hint);
+    let pointerId = null;
+
+    const setKnob = (u, v) => {
+      pad.style.setProperty("--u", u.toFixed(3));
+      pad.style.setProperty("--v", v.toFixed(3));
+    };
+    const showReadout = () => {
+      readout.textContent =
+        spec.axes.map((a) => `${a.key} ${state.command[a.key].toFixed(2)}`).join(" · ") + ` ${spec.unit}`;
+    };
+    // Knob and readout from state.command (after a release, Zero or a re-read).
+    const show = () => {
+      const stick = { u: 0, v: 0 };
+      for (const a of spec.axes) stick[a.stick] = a.sign * velocityToStick(a.key, state.command[a.key]);
+      setKnob(stick.u, stick.v);
+      showReadout();
+    };
+    const move = (event) => {
+      const rect = pad.getBoundingClientRect();
+      const reach = (rect.width - knob.offsetWidth) / 2 - 4;  // --reach in styles.css
+      let u = (event.clientX - rect.left - rect.width / 2) / reach;
+      let v = spec.track ? 0 : (rect.top + rect.height / 2 - event.clientY) / reach;
+      const r = Math.hypot(u, v);
+      if (r > 1) {
+        u /= r;
+        v /= r;
+      }
+      setKnob(u, v);
+      const stick = { u, v };
+      for (const a of spec.axes) {
+        state.command[a.key] = r < STICK_DEADZONE ? 0 : stickToVelocity(a.key, a.sign * stick[a.stick]);
+      }
+      showReadout();
+      scheduleCommand();
+    };
+    const release = () => {
+      if (pointerId === null) return;
+      const id = pointerId;
+      pointerId = null;
+      if (pad.hasPointerCapture(id)) pad.releasePointerCapture(id);
+      pad.classList.remove("dragging");
+      for (const a of spec.axes) state.command[a.key] = 0;
+      show();
+      sendCommandNow(true);
+    };
+
+    pad.addEventListener("pointerdown", (event) => {
+      if (pointerId !== null || pad.classList.contains("disabled")) return;
+      event.preventDefault();
+      pointerId = event.pointerId;
+      pad.setPointerCapture(pointerId);
+      pad.classList.add("dragging");
+      move(event);
+    });
+    pad.addEventListener("pointermove", (event) => {
+      if (event.pointerId === pointerId) move(event);
+    });
+    for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
+      pad.addEventListener(type, (event) => {
+        if (event.pointerId === pointerId) release();
+      });
+    }
+    return {
+      root,
+      show,
+      release,
+      active: () => pointerId !== null,
+      setEnabled: (on) => {
+        if (!on) release();
+        pad.classList.toggle("disabled", !on);
+      },
+    };
+  }
+
+  function buildCommandForm() {
+    if (!state.pads.length) {
       const row = document.createElement("div");
-      row.className = "param-row command-row";
-      const label = document.createElement("label");
-      label.textContent = `${axis.label} (${axis.unit})`;
-      const slider = document.createElement("input");
-      slider.type = "range";
-      slider.min = lo;
-      slider.max = hi;
-      slider.step = 0.01;
-      slider.id = `cmd-${axis.key}`;
-      const number = document.createElement("input");
-      number.type = "number";
-      number.min = lo;
-      number.max = hi;
-      number.step = 0.05;
-      number.id = `cmd-${axis.key}-num`;
-      const value = p[axis.param] ?? 0;
-      slider.value = number.value = value;
-      state.command[axis.key] = value;
-      const onChange = (v) => {
-        const x = Math.min(hi, Math.max(lo, parseFloat(v) || 0));
-        state.command[axis.key] = x;
-        slider.value = number.value = x;
-        scheduleCommand();
-      };
-      slider.addEventListener("input", () => onChange(slider.value));
-      number.addEventListener("change", () => onChange(number.value));
-      row.appendChild(label);
-      row.appendChild(slider);
-      row.appendChild(number);
+      row.className = "joysticks";
+      state.pads = PADS.map(makePad);
+      for (const pad of state.pads) row.appendChild(pad.root);
+      const container = document.getElementById("command");
+      container.innerHTML = "";
       container.appendChild(row);
+    }
+    // Seed from the node's cmd_* unless a stick is held (it owns the command).
+    if (!state.pads.some((pad) => pad.active())) {
+      const p = state.values.policy;
+      for (const axis of AXES) state.command[axis.key] = p[axis.param] ?? 0;
+    }
+    for (const pad of state.pads) {
+      if (!pad.active()) pad.show();
     }
     if (state.source) setSource(state.source);
   }
 
+  // set_command runs on a bridge worker thread, so requests are serialized here
+  // (one in flight, then the newest command): an older stick position can never
+  // overtake the 0 sent on release. While a stick moves, the command goes out
+  // at most every COMMAND_INTERVAL_MS; the last position always goes out.
   function scheduleCommand() {
+    if (state.commandTimer) return;
+    const wait = Math.max(0, state.lastSendAt + COMMAND_INTERVAL_MS - Date.now());
+    state.commandTimer = setTimeout(() => sendCommandNow(false), wait);
+  }
+
+  function sendCommandNow(force, label) {
     clearTimeout(state.commandTimer);
-    state.commandTimer = setTimeout(() => run("set_command", state.command, "Command"), COMMAND_DEBOUNCE_MS);
+    state.commandTimer = null;
+    if (state.commandInFlight) {
+      const queued = state.commandQueued || {};
+      state.commandQueued = { force: force || queued.force, label: label || queued.label };
+      return;
+    }
+    const command = Object.assign({}, state.command);
+    const json = JSON.stringify(command);
+    if (!force && json === state.lastSent) return;
+    state.lastSent = json;
+    state.lastSendAt = Date.now();
+    state.commandInFlight = true;
+    run("set_command", command, label || "Command").then((result) => {
+      state.commandInFlight = false;
+      if (!result) state.lastSent = null;  // failed: do not skip the next send
+      const queued = state.commandQueued;
+      state.commandQueued = null;
+      if (queued) sendCommandNow(queued.force, queued.label);
+    });
   }
 
   // ---------------------------------------------------------- parameter forms
@@ -456,10 +631,12 @@
       if (/^(lin|ang)_vel_/.test(name)) buildCommandForm();
       return result;
     } catch (err) {
-      setStatus(`${node}: ${name} REJECTED (${err.message})`);
+      const message = `${node}: ${name} REJECTED (${err.message})`;
+      setStatus(message);
       markInput(node, name, "rejected");
       delete state.dirty[k];
       await readParameters();
+      setStatus(message);  // keep the reason visible after the re-read
       return null;
     } finally {
       delete state.dirty[k];
@@ -491,10 +668,6 @@
     }
     const policy = state.values.policy;
     buildObservationScales(policy.observation_terms, policy.observation_scales);
-    const pathInput = document.getElementById("policy-path");
-    if (document.activeElement !== pathInput && policy.policy_path !== undefined) {
-      pathInput.value = policy.policy_path;
-    }
     if (policy.use_remote !== undefined && Date.now() > state.sourceHoldUntil) {
       state.source = policy.use_cmd_vel ? "cmd_vel" : policy.use_remote ? "remote" : "gui";
     }
@@ -532,15 +705,9 @@
     }
   });
   document.getElementById("zero").addEventListener("click", () => {
-    for (const axis of AXES) {
-      state.command[axis.key] = 0;
-      const s = document.getElementById(`cmd-${axis.key}`);
-      const n = document.getElementById(`cmd-${axis.key}-num`);
-      if (s) s.value = 0;
-      if (n) n.value = 0;
-    }
-    clearTimeout(state.commandTimer);
-    run("set_command", state.command, "Zero command");
+    for (const axis of AXES) state.command[axis.key] = 0;
+    for (const pad of state.pads) pad.show();
+    sendCommandNow(true, "Zero command");
   });
   document.getElementById("motor-toggle").addEventListener("click", async () => {
     const enabled = state.status && state.status.bridge && state.status.bridge.enable_lowcmd;
@@ -552,9 +719,21 @@
       apply("bridge", "enable_lowcmd", true);
     }
   });
-  document.getElementById("policy-reload").addEventListener("click", async () => {
-    const path = document.getElementById("policy-path").value.trim();
-    if (path && await confirmModal(`Load policy ${path}?`)) apply("policy", "policy_path", path);
+  document.getElementById("policy-select").addEventListener("change", async (event) => {
+    const select = event.target;
+    const path = select.value;
+    if (path) {
+      const name = select.options[select.selectedIndex].text;
+      const policy = (state.status && state.status.policy) || {};
+      const running = policy.mode === "RUNNING" || policy.mode === "RAMPING";
+      const ok = !running || await confirmModal(
+        `Switch the running policy to ${name}? It blends in over the start ramp; keep the velocity command at zero.`);
+      if (ok && await apply("policy", "policy_path", path)) {
+        setStatus(`${running ? "Switched to" : "Loaded"} model ${name}`);
+      }
+    }
+    state.modelsKey = "";  // re-render with the node's loaded model
+    select.blur();
   });
   document.getElementById("home-zero").addEventListener("click", () => {
     const n = (state.values.policy.joint_names || []).length;
@@ -570,5 +749,14 @@
     });
   }
 
+  // A held stick must not keep the robot walking once the page loses focus.
+  const releaseSticks = () => state.pads.forEach((pad) => pad.release());
+  window.addEventListener("blur", releaseSticks);
+  window.addEventListener("pagehide", releaseSticks);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) releaseSticks();
+  });
+
+  buildCommandForm();
   connect();
 })();

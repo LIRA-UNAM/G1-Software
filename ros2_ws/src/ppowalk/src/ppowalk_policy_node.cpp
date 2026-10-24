@@ -30,6 +30,16 @@
 //   RAMPING  policy running; the command blends from the start pose into the
 //            policy targets over start_ramp_s
 //   RUNNING  policy targets
+// Models: the *.onnx files of models_dir (default: the folder of policy_path)
+// are listed in ~/status for the GUI's dropdown, which loads one by setting
+// policy_path (a model whose input/output sizes do not match is rejected and
+// the current one stays loaded). While the policy runs, a new model is switched
+// in live, but only at a standstill: zero requested velocity, body angular
+// velocity <= switch_max_ang_vel and leg joint velocities <= switch_max_joint_vel
+// for switch_settle_s. The switch restarts the last-action observation and
+// blends from the last target into the new policy over start_ramp_s (RAMPING),
+// like Start. ~/status reports switch_ok / switch_reason for the GUI.
+//
 // The policy can only be started while the IMU reports the robot upright
 // (tilt <= max_start_tilt_deg). The tilt is computed continuously from the IMU
 // and published in ~/status so the GUI can disable Start.
@@ -46,6 +56,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <set>
@@ -78,6 +90,9 @@ public:
   : Node("ppowalk_policy_node")
   {
     policy_path_ = declare_parameter<std::string>("policy_path", "");
+    // Folder of selectable models (GUI dropdown); empty: the folder of
+    // policy_path (~/ppowalk_models without one).
+    models_dir_param_ = declare_parameter<std::string>("models_dir", "");
     joint_names_ =
       declare_parameter<std::vector<std::string>>("joint_names", std::vector<std::string>{});
     action_joint_names_ = declare_parameter<std::vector<std::string>>(
@@ -122,6 +137,10 @@ public:
     // Safety / motion.
     max_start_tilt_deg_ = declare_parameter<double>("max_start_tilt_deg", 30.0);
     start_ramp_s_ = declare_parameter<double>("start_ramp_s", 1.0);
+    // Standstill required to switch the running policy (policy_path).
+    switch_max_ang_vel_ = declare_parameter<double>("switch_max_ang_vel", 0.3);
+    switch_max_joint_vel_ = declare_parameter<double>("switch_max_joint_vel", 0.5);
+    switch_settle_s_ = declare_parameter<double>("switch_settle_s", 0.5);
     home_pose_ = declare_parameter<std::vector<double>>("home_pose", std::vector<double>{});
     home_max_vel_ = declare_parameter<double>("home_max_vel", 0.3);
     command_joint_names_ = declare_parameter<std::vector<std::string>>(
@@ -220,6 +239,7 @@ public:
               "num_obs=" + std::to_string(num_obs) + " but observation_terms give " +
               std::to_string(obs_builder_->size()));
     }
+    models_dir_ = resolve_models_dir(models_dir_param_, policy_path_);
     if (!policy_path_.empty()) {
       policy_ = load_policy(policy_path_, error);
       if (!policy_) {
@@ -277,6 +297,8 @@ public:
 
     create_timers();
     status_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this]() {publish_status();});
+    scan_models();
+    models_timer_ = create_wall_timer(std::chrono::seconds(1), [this]() {scan_models();});
     param_cb_ = add_on_set_parameters_callback(
       [this](const std::vector<rclcpp::Parameter> & params) {return on_set_parameters(params);});
 
@@ -347,6 +369,55 @@ private:
       return "remote_timeout_s must be > 0";
     }
     return "";
+  }
+
+  // models_dir, or the folder of the given policy path if empty; "~" expanded.
+  static std::string resolve_models_dir(std::string dir, const std::string & policy_path)
+  {
+    if (dir.empty()) {
+      dir = policy_path.empty() ? "~/ppowalk_models" :
+        std::filesystem::path(policy_path).parent_path().string();
+    }
+    if (!dir.empty() && dir[0] == '~') {
+      const char * home = std::getenv("HOME");
+      dir = std::string(home ? home : "") + dir.substr(1);
+    }
+    dir = std::filesystem::path(dir).lexically_normal().string();
+    while (dir.size() > 1 && dir.back() == '/') {
+      dir.pop_back();
+    }
+    return dir;
+  }
+
+  // *.onnx files of models_dir, sorted (offered by the GUI's model dropdown).
+  void scan_models()
+  {
+    std::vector<std::string> names;
+    std::error_code ec;
+    std::filesystem::directory_iterator it(models_dir_, ec);
+    models_error_ = ec ? ec.message() : "";
+    for (; !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+      std::error_code file_ec;
+      const auto name = it->path().filename().string();
+      if (it->path().extension() == ".onnx" && it->is_regular_file(file_ec) &&
+        name.find_first_of("\"\\") == std::string::npos)
+      {
+        names.push_back(name);
+      }
+    }
+    std::sort(names.begin(), names.end());
+    models_ = std::move(names);
+  }
+
+  static std::string json_safe(const std::string & text)
+  {
+    std::string out;
+    for (char ch : text) {
+      if (ch != '"' && ch != '\\') {
+        out += ch;
+      }
+    }
+    return out;
   }
 
   std::vector<bool> name_mask(const std::vector<std::string> & names) const
@@ -498,6 +569,8 @@ private:
     double action_clip = action_clip_, data_timeout = data_timeout_;
     double policy_rate = policy_rate_hz_, command_rate = command_rate_hz_;
     double max_tilt = max_start_tilt_deg_, ramp = start_ramp_s_;
+    double switch_ang = switch_max_ang_vel_, switch_joint = switch_max_joint_vel_;
+    double switch_settle = switch_settle_s_;
     double home_vel = home_max_vel_, home_min = home_min_duration_;
     double cmd_vel_timeout = cmd_vel_timeout_;
     bool use_cmd_vel = use_cmd_vel_;
@@ -509,6 +582,7 @@ private:
     bool detect_offline = detect_offline_;
     bool command_joints_changed = false;
     std::optional<std::string> policy_path;
+    std::optional<std::string> models_dir;
     bool rebuild_obs = false;
     try {
       for (const auto & p : params) {
@@ -539,6 +613,12 @@ private:
           max_tilt = p.as_double();
         } else if (name == "start_ramp_s") {
           ramp = p.as_double();
+        } else if (name == "switch_max_ang_vel") {
+          switch_ang = p.as_double();
+        } else if (name == "switch_max_joint_vel") {
+          switch_joint = p.as_double();
+        } else if (name == "switch_settle_s") {
+          switch_settle = p.as_double();
         } else if (name == "home_max_vel") {
           home_vel = p.as_double();
         } else if (name == "home_min_duration_s") {
@@ -583,6 +663,8 @@ private:
           remote_timeout = p.as_double();
         } else if (name == "policy_path") {
           policy_path = p.as_string();
+        } else if (name == "models_dir") {
+          models_dir = p.as_string();
         } else if (name == "command_joints") {
           command_joints = p.as_string_array();
           result.reason = check_command_joints(command_joints);
@@ -611,6 +693,10 @@ private:
     {
       result.reason = "action_clip, start_ramp_s, home_min_duration_s >= 0; data_timeout_s, "
         "home_max_vel, cmd_vel_timeout_s > 0";
+      return result;
+    }
+    if (switch_ang <= 0.0 || switch_joint <= 0.0 || switch_settle < 0.0) {
+      result.reason = "switch_max_ang_vel, switch_max_joint_vel > 0; switch_settle_s >= 0";
       return result;
     }
     if (max_tilt <= 0.0 || max_tilt > 90.0) {
@@ -646,9 +732,12 @@ private:
     }
     std::unique_ptr<getup::OnnxPolicy> policy;
     if (policy_path && *policy_path != policy_path_) {
-      if (mode_ == Mode::kRamping || mode_ == Mode::kRunning) {
-        result.reason = "policy_path can only be changed while the policy is stopped";
-        return result;
+      if (running()) {
+        const std::string blocker = switch_blocker();
+        if (!blocker.empty()) {
+          result.reason = "policy switch refused: " + blocker;
+          return result;
+        }
       }
       policy = load_policy(*policy_path, result.reason);
       if (!policy) {
@@ -667,6 +756,9 @@ private:
     data_timeout_ = data_timeout;
     max_start_tilt_deg_ = max_tilt;
     start_ramp_s_ = ramp;
+    switch_max_ang_vel_ = switch_ang;
+    switch_max_joint_vel_ = switch_joint;
+    switch_settle_s_ = switch_settle;
     home_max_vel_ = home_vel;
     home_min_duration_ = home_min;
     use_cmd_vel_ = use_cmd_vel;
@@ -696,7 +788,24 @@ private:
     if (policy) {
       policy_ = std::move(policy);
       policy_path_ = *policy_path;
-      RCLCPP_WARN(get_logger(), "Loaded policy %s", policy_path_.c_str());
+      if (running()) {
+        // Live switch (standstill checked above): restart the last-action
+        // observation and blend from the last target into the new policy.
+        std::fill(action_.begin(), action_.end(), 0.0f);
+        move_from_ = current_pose();
+        move_start_ = SteadyClock::now();
+        mode_ = start_ramp_s_ > 0.0 ? Mode::kRamping : Mode::kRunning;
+        step_ = 0;
+        still_since_.reset();
+        RCLCPP_WARN(get_logger(), "Switched the running policy to %s", policy_path_.c_str());
+      } else {
+        RCLCPP_WARN(get_logger(), "Loaded policy %s", policy_path_.c_str());
+      }
+    }
+    if (models_dir) {
+      models_dir_param_ = *models_dir;
+      models_dir_ = resolve_models_dir(models_dir_param_, policy_path_);
+      scan_models();
     }
     if (policy_rate != policy_rate_hz_ || command_rate != command_rate_hz_) {
       policy_rate_hz_ = policy_rate;
@@ -800,12 +909,7 @@ private:
 
   void remote_event(const std::string & text)
   {
-    remote_event_.clear();
-    for (char ch : text) {
-      if (ch != '"' && ch != '\\') {
-        remote_event_ += ch;
-      }
-    }
+    remote_event_ = json_safe(text);
     last_remote_event_ = SteadyClock::now();
     ++remote_events_;
   }
@@ -880,6 +984,67 @@ private:
     return c;
   }
 
+  // Why the requested command / the robot is not at rest ("" when it is).
+  std::string motion_blocker() const
+  {
+    const auto c = raw_command();
+    if (std::abs(c[0]) > 1e-3 || std::abs(c[1]) > 1e-3 || std::abs(c[2]) > 1e-3) {
+      return "velocity command not zero";
+    }
+    char buf[96];
+    const auto & w = state_.base_ang_vel;
+    const double ang = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+    if (ang > switch_max_ang_vel_) {
+      std::snprintf(
+        buf, sizeof(buf), "body rotating (%.2f > %.2f rad/s)", ang, switch_max_ang_vel_);
+      return buf;
+    }
+    double joint = 0.0;
+    for (size_t idx : action_index_) {
+      joint = std::max(joint, std::abs(state_.joint_vel[idx]));
+    }
+    if (joint > switch_max_joint_vel_) {
+      std::snprintf(
+        buf, sizeof(buf), "legs moving (%.2f > %.2f rad/s)", joint, switch_max_joint_vel_);
+      return buf;
+    }
+    return "";
+  }
+
+  // Every policy step: (re)start or reset the standstill timer.
+  void update_standstill()
+  {
+    if (!motion_blocker().empty()) {
+      still_since_.reset();
+    } else if (!still_since_) {
+      still_since_ = SteadyClock::now();
+    }
+  }
+
+  // Why the running policy cannot be switched now ("" when it can).
+  std::string switch_blocker() const
+  {
+    if (mode_ == Mode::kRamping) {
+      return "ramping, wait until RUNNING";
+    }
+    if (mode_ != Mode::kRunning) {
+      return "policy not running";
+    }
+    if (!data_fresh()) {
+      return "no fresh IMU/JointState data";
+    }
+    const std::string motion = motion_blocker();
+    if (!motion.empty()) {
+      return motion;
+    }
+    if (!still_since_ || age(still_since_) < switch_settle_s_) {
+      char buf[64];
+      std::snprintf(buf, sizeof(buf), "settling (%.1f s at rest needed)", switch_settle_s_);
+      return buf;
+    }
+    return "";
+  }
+
   // -------------------------------------------------------------- services
 
   std::vector<double> current_pose() const
@@ -947,6 +1112,7 @@ private:
       move_start_ = SteadyClock::now();
       mode_ = start_ramp_s_ > 0.0 ? Mode::kRamping : Mode::kRunning;
       step_ = 0;
+      still_since_.reset();
       message = "started";
       RCLCPP_INFO(get_logger(), "Policy started (tilt %.1f deg)", tilt_deg_);
       return true;
@@ -996,6 +1162,7 @@ private:
       mode_ = target_ ? Mode::kHolding : Mode::kIdle;
       return;
     }
+    update_standstill();
     state_.command = velocity_command();
     obs_state_ = state_;
     const auto pin = pinned_mask();
@@ -1072,12 +1239,7 @@ private:
   void publish_status()
   {
     const auto c = velocity_command();
-    std::string path;
-    for (char ch : policy_path_) {
-      if (ch != '"' && ch != '\\') {
-        path += ch;
-      }
-    }
+    const std::string path = json_safe(policy_path_);
     char buf[1024];
     std::snprintf(
       buf, sizeof(buf),
@@ -1097,10 +1259,14 @@ private:
       extra, sizeof(extra), ",\"command_raw\":[%.3f,%.3f,%.3f],\"command_offset\":[%.3f,%.3f,%.3f]",
       raw[0], raw[1], raw[2], cmd_offset_[0], cmd_offset_[1], cmd_offset_[2]);
     json += extra;
+    const std::string blocker = switch_blocker();
+    json += std::string(",\"switch_ok\":") + (blocker.empty() ? "true" : "false") +
+      ",\"switch_reason\":\"" + json_safe(blocker) + "\"";
     json += ",\"command_joints\":" + json_list(command_joint_names_) +
       ",\"pinned_joints\":" + json_list(names_where(pinned_mask())) +
       ",\"offline_detected\":" + json_list(names_where(offline_now_)) + ",\"remote\":" +
-      remote_status() + "}";
+      remote_status() + ",\"models_dir\":\"" + json_safe(models_dir_) + "\",\"models\":" +
+      json_list(models_) + ",\"models_error\":\"" + json_safe(models_error_) + "\"}";
     std_msgs::msg::String msg;
     msg.data = json;
     status_pub_->publish(msg);
@@ -1128,6 +1294,7 @@ private:
 
   // Parameters.
   std::string policy_path_;
+  std::string models_dir_param_;
   std::vector<std::string> joint_names_;
   std::vector<std::string> action_joint_names_;
   std::vector<size_t> action_index_;
@@ -1153,6 +1320,9 @@ private:
   double remote_timeout_{0.5};
   double max_start_tilt_deg_{30.0};
   double start_ramp_s_{1.0};
+  double switch_max_ang_vel_{0.3};
+  double switch_max_joint_vel_{0.5};
+  double switch_settle_s_{0.5};
   std::vector<double> home_pose_;
   std::vector<std::string> command_joint_names_;
   std::vector<std::string> always_commanded_;
@@ -1163,6 +1333,9 @@ private:
   double home_min_duration_{2.0};
 
   // State.
+  std::string models_dir_;  // resolved models_dir
+  std::vector<std::string> models_;  // *.onnx in models_dir_
+  std::string models_error_;
   std::unique_ptr<getup::ObservationBuilder> obs_builder_;
   std::unique_ptr<getup::OnnxPolicy> policy_;
   std::vector<float> obs_;
@@ -1176,6 +1349,7 @@ private:
   double inference_ms_{0.0};
   double tilt_deg_{180.0};
   Mode mode_{Mode::kIdle};
+  std::optional<SteadyClock::time_point> still_since_;  // at rest since (update_standstill)
   getup::RobotState state_;
   getup::RobotState obs_state_;  // state_ with pinned joints replaced
   std::vector<bool> is_action_;
@@ -1216,6 +1390,7 @@ private:
   rclcpp::TimerBase::SharedPtr policy_timer_;
   rclcpp::TimerBase::SharedPtr command_timer_;
   rclcpp::TimerBase::SharedPtr status_timer_;
+  rclcpp::TimerBase::SharedPtr models_timer_;
 };
 
 }  // namespace ppowalk

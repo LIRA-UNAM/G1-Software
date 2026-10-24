@@ -12,6 +12,18 @@ make ppowalk WALK_POLICY=/abs/path/model.onnx WALK_ARGS="enable_lowcmd:=true"
 # GUI: http://<robot-ip>:8084
 ```
 
+Every `*.onnx` in the models folder (`models_dir`; by default the folder of the
+launched model, i.e. `~/ppowalk_models` with `make ppowalk`) is offered in the
+GUI's Model dropdown. Choosing one while the policy is stopped loads it for the
+next Start. Choosing one while the policy runs switches to it live, with no
+Home / Start needed. This is allowed only at a standstill: zero requested
+velocity, body angular velocity <= `switch_max_ang_vel` (0.3 rad/s) and leg
+joint velocities <= `switch_max_joint_vel` (0.5 rad/s), continuously for
+`switch_settle_s` (0.5 s). The new policy blends in over `start_ramp_s`, like
+Start. Otherwise the dropdown is disabled with the reason, and the node refuses
+a `policy_path` change. A model that is not 67 -> 12 is rejected and the
+current one stays loaded.
+
 ## What the node reproduces from training
 
 * Observation (67): `base_ang_vel` (3, pelvis gyro), `projected_gravity` (3),
@@ -48,7 +60,8 @@ make ppowalk WALK_POLICY=/abs/path/model.onnx WALK_ARGS="enable_lowcmd:=true"
   collapses).
 * **Velocity command:** one source at a time, chosen with the GUI's "Command
   source" switch: the wireless remote's sticks (default, `use_remote`), the GUI
-  sliders (`cmd_vx/cmd_vy/cmd_wz`), or `geometry_msgs/Twist` on `/cmd_vel`
+  joysticks (`cmd_vx/cmd_vy/cmd_wz`; left = vx/vy, right = wz, releasing a stick
+  sends 0), or `geometry_msgs/Twist` on `/cmd_vel`
   (`use_cmd_vel`; falls back to 0 if it stops for `cmd_vel_timeout_s`). Every
   source is clamped to the limits (±0.7 m/s, ±0.7 m/s, ±0.7 rad/s by default).
   Calibration offsets (`cmd_vx_offset/cmd_vy_offset/cmd_wz_offset`) are added
@@ -89,8 +102,9 @@ In `mjlab-biped-playground`:
 
 ```bash
 uv run python export_policy.py Pumas-Velocity-Flat-Unitree-G1-PPO \
-    --wandb-run-path Pumanoids/mjlab_playground/<run> \
-    --export-dir export --filename g1_ppowalk.onnx
+    --wandb-run-path Pumanoids/g1_velocity/<run> \
+    --export-dir export --filename g1_velocity_flat_ppo_<run>.onnx
+scp export/g1_velocity_flat_ppo_<run>.onnx g1:ppowalk_models/   # shows up in the dropdown
 ```
 
 The node checks the model is 67 -> 12 and refuses anything else.

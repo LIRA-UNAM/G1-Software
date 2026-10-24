@@ -63,12 +63,12 @@
       <label>Command source</label>
       <div id="source" class="groups">
         <label><input type="radio" name="source" value="remote"> Remote controller</label>
-        <label><input type="radio" name="source" value="gui"> GUI sliders</label>
+        <label><input type="radio" name="source" value="gui"> GUI joysticks</label>
         <label><input type="radio" name="source" value="cmd_vel"> /cmd_vel topic</label>
       </div>
     </div>
     <div id="command" class="params"></div>
-    <p id="command-hint" class="hint">Sent to the policy while it runs (cmd_vx / cmd_vy / cmd_wz). Slider ranges follow the limits in the policy panel.</p>
+    <p id="command-hint" class="hint">Sent to the policy while it runs (cmd_vx / cmd_vy / cmd_wz). Drag a joystick to command, release to stop; full deflection reaches the limits in the policy panel.</p>
     <h3>Remote controller</h3>
     <div class="state-grid remote-grid">
       <div><span>Left stick (lx, ly)</span><b id="remote-left">&mdash;</b></div>
@@ -92,10 +92,13 @@
     <h3>Observation scales</h3>
     <div id="obs-scales" class="params"></div>
     <h3>Model</h3>
-    <div class="model-row">
-      <input id="policy-path" type="text" spellcheck="false" placeholder="/abs/path/g1_ppowalk.onnx">
-      <button id="policy-reload" class="secondary">Load (policy stopped)</button>
+    <div class="params">
+      <div class="param-row">
+        <label for="policy-select">Policy file</label>
+        <select id="policy-select"><option value="">(none)</option></select>
+      </div>
     </div>
+    <p id="models-hint" class="hint"></p>
   </section>
 
   <section class="panel panel-bridge">
